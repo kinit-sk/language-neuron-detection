@@ -38,7 +38,6 @@ identify_neurons: # identify neurons
     variant: "gate" 
     gated_up_act_treshold: 0.1
     save_dir: "data/activations"
-    visualize: true
 
   select_neurons: # LAPE
     run: true

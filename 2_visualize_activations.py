@@ -1,36 +1,30 @@
 import hydra
 import os
-import torch
-import pandas as pd
-import seaborn as sns
 from datetime import datetime
+
 import matplotlib.pyplot as plt
-from omegaconf import DictConfig
 import numpy as np
+import seaborn as sns
+import torch
+from omegaconf import DictConfig
 
 
-class ActivationAnalyzer:
-    def __init__(self, load_dir, save_dir: str, langs: list[str]):
+class ActivationVisualizer:
+    def __init__(self, load_dir: str, langs: list[str]):
         self.langs = langs
         self.load_dir = load_dir
-        self.save_dir = save_dir
-
-        self.avg_activations_per_lang = {}
-        self.avg_df = None
-        self.avg_dfs = {}
-        os.makedirs(self.save_dir, exist_ok=True)
 
     def load_activation_data(self, lang):
-        file_path = f"{self.load_dir}/{lang}.pt"
+        file_path = os.path.join(self.load_dir, f'{lang}.pt')
         if not os.path.exists(file_path):
-            print(f"⚠️ File not found for {lang}: {file_path}")
+            print(f"File not found for {lang}: {file_path}")
             return None
         return torch.load(file_path, map_location="cpu")
 
-    def _compute_layer_stats(self, avg_acts):
-        avg_acts = avg_acts.clone()
-        avg_acts[torch.isnan(avg_acts)] = 0
-        avg_acts[torch.isinf(avg_acts)] = 0
+    def _compute_layer_stats(self, avg_acts: torch.Tensor):
+        # avg_acts = avg_acts.clone()
+        # avg_acts[torch.isnan(avg_acts)] = 0
+        # avg_acts[torch.isinf(avg_acts)] = 0
         if avg_acts.dim() == 1:
             layer_means = avg_acts
         else:
@@ -38,11 +32,7 @@ class ActivationAnalyzer:
         global_mean = avg_acts.mean()
         return layer_means, global_mean
 
-    def _activation_key(self, name):
-        return str(name).replace("/", "_").replace(" ", "_")
-
-    def compute_average_activations(self):
-        self.avg_dfs = {}
+    def _collect_activations(self):
         activations_by_type = {}
         for lang in self.langs:
             data = self.load_activation_data(lang)
@@ -56,50 +46,44 @@ class ActivationAnalyzer:
                 key = "mlp_average_activations"
                 if key not in activations_by_type:
                     activations_by_type[key] = {}
-                activations_by_type[key][lang] = {
-                    f"Layer_{i:02d}": layer_means[i].item() for i in range(len(layer_means))
-                }
-                activations_by_type[key][lang]["Global_mean"] = global_mean.item()
+                activations_by_type[key][lang] = (layer_means, global_mean)
 
             # Attention activations
             if "attn_average_activations" in data and isinstance(data["attn_average_activations"], dict):
-                for proj_name, proj_acts in data["attn_average_activations"].items():
+                for key, proj_acts in data["attn_average_activations"].items():
                     if not torch.is_tensor(proj_acts):
                         continue
                     layer_means, global_mean = self._compute_layer_stats(proj_acts)
-                    key = self._activation_key(proj_name)
                     if key not in activations_by_type:
                         activations_by_type[key] = {}
-                    activations_by_type[key][lang] = {
-                        f"Layer_{i:02d}": layer_means[i].item() for i in range(len(layer_means))
-                    }
-                    activations_by_type[key][lang]["Global_mean"] = global_mean.item()
+                    activations_by_type[key][lang] = (layer_means, global_mean)
 
         if not activations_by_type:
-            print("❌ No activation data found.")
+            print("No activation data found.")
             return None
+        return activations_by_type
 
-        for key, per_lang in activations_by_type.items():
-            df = pd.DataFrame.from_dict(per_lang, orient="index")
-            cols = sorted([c for c in df.columns if c.startswith("Layer_")])
-            if "Global_mean" in df.columns:
-                df = df[cols + ["Global_mean"]]
-            else:
-                df = df[cols]
-            self.avg_dfs[key] = df
-
-        self.avg_df = self.avg_dfs.get("mlp_average_activations")
-        return self.avg_df
-
+    def _build_heatmap_data(self, per_lang: dict[str, tuple[torch.Tensor, torch.Tensor]]):
+        langs = list(per_lang.keys())
+        max_layers = max(len(v[0]) for v in per_lang.values())
+        cols = [f"Layer_{i:02d}" for i in range(max_layers)] + ["Global_mean"]
+        data = np.full((len(langs), len(cols)), np.nan, dtype=float)
+        for row, lang in enumerate(langs):
+            layer_means, global_mean = per_lang[lang]
+            layer_vals = layer_means.detach().cpu().numpy().astype(float)
+            data[row, : len(layer_vals)] = layer_vals
+            data[row, -1] = float(global_mean.item())
+        return data, langs, cols
 
     def visualize(self):
-        if not self.avg_dfs:
-            print("⚠️ No data to visualize.")
+        activations_by_type = self._collect_activations()
+        if not activations_by_type:
+            print("No data to visualize.")
             return
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        for key, df in self.avg_dfs.items():
-            values = df.to_numpy(dtype=float)
+        for key, per_lang in activations_by_type.items():
+            values, y_labels, x_labels = self._build_heatmap_data(per_lang)
             vmin = float(np.nanpercentile(values, 5))
             vmax = float(np.nanpercentile(values, 95))
             if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin == vmax:
@@ -107,52 +91,41 @@ class ActivationAnalyzer:
                 vmax = float(np.nanmax(values))
             plt.figure(figsize=(14, 6))
             sns.heatmap(
-                df,
+                values,
                 cmap="coolwarm",
                 vmin=vmin,
                 vmax=vmax,
                 linewidths=0.3,
-                cbar_kws={'label': 'Avg activation'},
+                cbar_kws={"label": "Avg activation"},
                 annot=True,
                 fmt=".3f",
                 annot_kws={"size": 7},
+                xticklabels=x_labels,
+                yticklabels=y_labels,
             )
 
             title_key = key.replace("_", " ")
             plt.title(
-                f"Average neuron activations ({title_key}) per layer and language for ...",
+                f"Average neuron activations ({title_key}) per layer and language",
                 fontsize=14,
             )
             plt.xlabel("Layer")
             plt.ylabel("Language")
             plt.tight_layout()
 
-            if key == "mlp_average_activations":
-                filename = f"{self.save_dir}/{timestamp}-average-activations.png"
-            else:
-                filename = f"{self.save_dir}/{timestamp}-{key}-average-activations.png"
+            filename = os.path.join(self.load_dir, f"{timestamp}-{key}-activations.png")
             plt.savefig(filename, dpi=200)
             print(f"Saved heatmap to {filename}")
-
-    def run(self):
-        self.compute_average_activations()
-        if self.avg_df is not None:
-            pd.set_option("display.float_format", "{:,.6f}".format)
-            self.visualize()
-
 
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
 
-    if cfg.identify_neurons.record_activations.visualize:
-
-        save_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
-        analyzer = ActivationAnalyzer(
-            save_dir,
-            save_dir,
-            cfg.main.languages
-        )
-        analyzer.run()
+    save_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
+    visualizer = ActivationVisualizer(
+        save_dir,
+        cfg.main.languages
+    )
+    visualizer.visualize()
 
 
 
