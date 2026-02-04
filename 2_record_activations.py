@@ -12,9 +12,16 @@ from tqdm import tqdm
 from misc import get_device, ActivationAnalyzer
 
 
+def _safe_float_tensor(x: torch.Tensor) -> torch.Tensor:
+    x = x.float()
+    if not torch.isfinite(x).all():
+        x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+    return x
+
+
 def register_gate_activation_hooks_on_mlp(mlp: torch.nn.Module, layer_idx: int, activations: dict[str, torch.Tensor]):
     def hook_fn(module, inputs, output):
-        act = F.silu(output)
+        act = _safe_float_tensor(F.silu(output))
         with torch.no_grad():
             activations["over_zero"][layer_idx, :] += (act > 0).sum(dim=(0, 1)).cpu() # the gate-fn >0 means (by concept) "active neuron" not value
             activations["activation_sums"][layer_idx, :] += act.sum(dim=(0, 1)).cpu()
@@ -28,7 +35,7 @@ def register_gateup_activation_hooks_on_mlp(mlp: torch.nn.Module, layer_idx: int
     def patched_forward(self, x):
         gate = self.gate_proj(x)
         up = self.up_proj(x)
-        gated = F.silu(gate) * up
+        gated = _safe_float_tensor(F.silu(gate) * up)
 
         with torch.no_grad():
             ## count only neurons that do not have activation close to 0 
@@ -78,7 +85,8 @@ def attach_hooks(cfg, model: torch.nn.Module, mlp_activations: dict[str, torch.T
 
         def attn_hook_fn(module_name, layer_idx, module, inputs, output):
             with torch.no_grad():
-                attn_activations[f"{module_name}_sums"][layer_idx, :] += output.abs().sum(dim=(0, 1)).cpu()
+                safe_out = _safe_float_tensor(output)
+                attn_activations[f"{module_name}_sums"][layer_idx, :] += safe_out.abs().sum(dim=(0, 1)).cpu()
                 attn_activations[f"{module_name}_counts"][layer_idx] += output.size(0) * output.size(1)
                 
         handles.append(layer.self_attn.q_proj.register_forward_hook(partial(attn_hook_fn, 'q_proj', i)))
@@ -90,12 +98,30 @@ def attach_hooks(cfg, model: torch.nn.Module, mlp_activations: dict[str, torch.T
 def save_activations(mlp_activations, attn_activations, lang: str, save_dir: str, size: int):
 
     ## Calculate average activations
-    mlp_activations["average_activations"] = mlp_activations["activation_sums"] / mlp_activations["activation_counts"].float()
+    mlp_counts = mlp_activations["activation_counts"].float()
+    mlp_activations["average_activations"] = torch.where(
+        mlp_counts > 0,
+        mlp_activations["activation_sums"] / mlp_counts,
+        torch.zeros_like(mlp_activations["activation_sums"]),
+    )
     attn_average_activations = {
-        "q_proj_average": attn_activations["q_proj_sums"] / attn_activations["q_proj_counts"].unsqueeze(1).float(),
-        "k_proj_average": attn_activations["k_proj_sums"] / attn_activations["k_proj_counts"].unsqueeze(1).float(),
-        "v_proj_average": attn_activations["v_proj_sums"] / attn_activations["v_proj_counts"].unsqueeze(1).float(),
+        "q_proj_average": torch.where(
+            attn_activations["q_proj_counts"].unsqueeze(1) > 0,
+            attn_activations["q_proj_sums"] / attn_activations["q_proj_counts"].unsqueeze(1).float(),
+            torch.zeros_like(attn_activations["q_proj_sums"]),
+        ),
+        "k_proj_average": torch.where(
+            attn_activations["k_proj_counts"].unsqueeze(1) > 0,
+            attn_activations["k_proj_sums"] / attn_activations["k_proj_counts"].unsqueeze(1).float(),
+            torch.zeros_like(attn_activations["k_proj_sums"]),
+        ),
+        "v_proj_average": torch.where(
+            attn_activations["v_proj_counts"].unsqueeze(1) > 0,
+            attn_activations["v_proj_sums"] / attn_activations["v_proj_counts"].unsqueeze(1).float(),
+            torch.zeros_like(attn_activations["v_proj_sums"]),
+        ),
     }
+    import code; code.interact(local=dict(globals(), **locals()))
 
     output = dict(
         n=size,
@@ -152,13 +178,6 @@ def main(cfg: DictConfig):
             if h is not None:
                 h.remove()
 
-    # if cfg.identify_neurons.record_activations.visualize:
-    #     analyzer = ActivationAnalyzer(
-    #         cfg.identify_neurons.record_activations.save_dir,
-    #         cfg.identify_neurons.record_activations.save_dir,
-    #         cfg.main.languages
-    #     )
-    #     analyzer.run()
 
 
 
