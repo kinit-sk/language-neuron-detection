@@ -46,15 +46,14 @@ class ActivationAnalyzer:
         activations_by_type = {}
         for lang in self.langs:
             data = self.load_activation_data(lang)
-            import code; code.interact(local=dict(globals(), **locals()))
             if data is None:
                 continue
 
             # MLP activations
-            if "average_activations" in data:
-                avg_acts = data["average_activations"]
+            if "mlp_average_activations" in data:
+                avg_acts = data["mlp_average_activations"]
                 layer_means, global_mean = self._compute_layer_stats(avg_acts)
-                key = "average_activations"
+                key = "mlp_average_activations"
                 if key not in activations_by_type:
                     activations_by_type[key] = {}
                 activations_by_type[key][lang] = {
@@ -89,7 +88,7 @@ class ActivationAnalyzer:
                 df = df[cols]
             self.avg_dfs[key] = df
 
-        self.avg_df = self.avg_dfs.get("average_activations")
+        self.avg_df = self.avg_dfs.get("mlp_average_activations")
         return self.avg_df
 
 
@@ -121,19 +120,19 @@ class ActivationAnalyzer:
 
             title_key = key.replace("_", " ")
             plt.title(
-                f"Average neuron activations ({title_key}) per layer and language for {self.name}",
+                f"Average neuron activations ({title_key}) per layer and language for ...",
                 fontsize=14,
             )
             plt.xlabel("Layer")
             plt.ylabel("Language")
             plt.tight_layout()
 
-            if key == "average_activations":
+            if key == "mlp_average_activations":
                 filename = f"{self.save_dir}/{timestamp}-average-activations.png"
             else:
                 filename = f"{self.save_dir}/{timestamp}-{key}-average-activations.png"
             plt.savefig(filename, dpi=200)
-            print(f"🖼️ Saved heatmap to {filename}")
+            print(f"Saved heatmap to {filename}")
 
     def run(self):
         self.compute_average_activations()

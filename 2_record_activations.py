@@ -121,7 +121,6 @@ def save_activations(mlp_activations, attn_activations, lang: str, save_dir: str
             torch.zeros_like(attn_activations["v_proj_sums"]),
         ),
     }
-    import code; code.interact(local=dict(globals(), **locals()))
 
     output = dict(
         n=size,
