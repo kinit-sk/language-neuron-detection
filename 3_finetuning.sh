@@ -13,9 +13,6 @@ cleanup() {
 # Ensure cleanup happens on script exit, error, or Ctrl+C
 trap cleanup EXIT INT TERM
 
-# # Start mlflow server
-# mlflow server --backend-store-uri=sqlite:///mlruns/mlruns.db --default-artifact-root=file:mlruns --host 0.0.0.0 --port 5001 >/tmp/mlflow.log 2>&1 &
-
 echo "Starting MLflow server..."
 mlflow server \
   --backend-store-uri "$MLFLOW_BACKEND_URI" \
@@ -32,7 +29,7 @@ until curl -s "http://127.0.0.1:$MLFLOW_PORT" >/dev/null; do
   sleep 0.5
 done
 
-echo "MLflow server running (PID=$MLFLOW_PID)"
+echo "MLflow server running (PID=$MLFLOW_PID) logs in /tmp/mlflow.log"
 
 
 
