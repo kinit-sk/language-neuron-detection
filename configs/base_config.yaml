@@ -1,0 +1,97 @@
+build_order:
+  - run_args
+  - args
+  - callbacks
+  - dataset
+  - dataset_train
+  - dataset_valid
+  - tokenizer
+  - model
+  - trainer
+
+args:
+  output_dir: "outputs"
+  num_train_examples: 20000
+  num_val_examples: 100
+  model: "Qwen/Qwen2.5-1.5B-Instruct"
+  dtype: ${object:torch.bfloat16} # null / bfloat16 / float16 / ... 
+  max_length: 2048
+  batch_size: 1
+  grad_accum: 8
+  eval_batch_size: ${args.batch_size}
+  learning_rate: 2e-5
+  epochs: 1
+  eval_every_steps: 100
+  save_steps: ${args.eval_every_steps}
+
+run_args:
+  project_name: skill_preserving_finetuning_w_hooks
+  experiment_class: ${method:finetuning_impl.example.Experiment}
+  tracker:
+    _target_: runexp.MLFlowTracker
+    project_name: ${run_args.project_name}
+    experiment_name: ${run_args.experiment_name}
+    description: ${run_args.description}
+    tracking_uri: 'http://localhost:5001' # sqlite:///mlruns/mlruns.db
+
+dataset:
+  _target_: datasets.load_dataset
+  path: "HuggingFaceFW/fineweb-2"
+  name: "slk_Latn"
+  split: "train"
+  streaming: true
+
+dataset_train:
+  _target_: finetuning_impl.example.take
+  dataset: ${dataset}
+  num_take: ${args.num_train_examples}
+
+dataset_valid:
+  _target_: finetuning_impl.example.shard_take
+  dataset: ${dataset}
+  num_shards: 10
+  index: 9
+  num_take: ${args.num_val_examples}
+
+tokenizer:
+  _target_: finetuning_impl.example.load_tokenizer
+  _args_:
+    - ${args.model}
+
+model:
+  _target_: transformers.AutoModelForCausalLM.from_pretrained
+  _args_:
+    - ${args.model}
+  dtype: ${args.dtype}
+
+trainer:
+  _target_: trl.SFTTrainer
+  model: ${model}
+  train_dataset: ${dataset_train}
+  processing_class: ${tokenizer}
+  eval_dataset: ${dataset_valid}
+  callbacks:
+    -
+      _target_: runexp.TrackerTrainerCallback
+      tracker: ${run_args.tracker}
+      log_artifacts: false
+  args:
+    _target_: trl.SFTConfig
+    output_dir: ${args.output_dir}
+    max_length: ${args.max_length}
+    per_device_train_batch_size: ${args.batch_size}
+    gradient_accumulation_steps: ${args.grad_accum}
+    per_device_eval_batch_size: ${args.eval_batch_size}
+    lr_scheduler_type: linear
+    lr_scheduler_kwargs: null
+    learning_rate: ${args.learning_rate}
+    num_train_epochs: ${args.epochs}
+    max_steps: ${eval:'${args.num_train_examples} // (${args.batch_size} * ${args.grad_accum})'}
+    report_to: []
+    dataset_text_field: "text"
+    eval_strategy: "steps"
+    eval_steps: ${args.eval_every_steps}
+    save_steps: ${args.save_steps}
+    load_best_model_at_end: false
+    metric_for_best_model: "eval_loss"
+    greater_is_better: false
