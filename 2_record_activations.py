@@ -9,7 +9,7 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 
-from misc import get_device, ActivationAnalyzer
+from misc import get_device
 
 
 def _safe_float_tensor(x: torch.Tensor) -> torch.Tensor:
