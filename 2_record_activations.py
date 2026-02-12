@@ -167,8 +167,12 @@ def main(cfg: DictConfig):
 
         ids = torch.load(os.path.join(cfg.identify_neurons.tokenize.save_dir, cfg.main.ex_id, f"{lang}.pt"))
         print(f"{lang} tokens loaded succesfully")
-        num_tokens = (len(ids) // chunk_size) * chunk_size
-        ids = ids[:min(num_tokens, cfg.identify_neurons.record_activations.max_tokens)]
+        if cfg.identify_neurons.record_activations.max_tokens > 0:
+            size_to_use = min(len(ids), cfg.identify_neurons.record_activations.max_tokens)
+        else:
+            size_to_use = len(ids)
+        num_tokens = (size_to_use // chunk_size) * chunk_size
+        ids = ids[:num_tokens]
         ids = ids.view(-1, chunk_size)
 
         for b in tqdm(range(0, ids.size(0), batch_size)):
