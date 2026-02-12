@@ -24,7 +24,7 @@ def register_gate_activation_hooks_on_mlp(mlp: torch.nn.Module, layer_idx: int, 
         act = _safe_float_tensor(F.silu(output))
         with torch.no_grad():
             activations["over_zero"][layer_idx, :] += (act > 0).sum(dim=(0, 1)).cpu() # the gate-fn >0 means (by concept) "active neuron" not value
-            activations["activation_sums"][layer_idx, :] += act.sum(dim=(0, 1)).cpu()
+            activations["activation_sums"][layer_idx, :] += act.abs().sum(dim=(0, 1)).cpu()
             activations["activation_counts"][layer_idx, :] += act.size(0) * act.size(1)
     return mlp.gate_proj.register_forward_hook(hook_fn)
 
@@ -58,10 +58,13 @@ def init_activations(intermediate_size: int, num_layers: int):
     }
     # TODO: Remove hardcoded values 2048 and 512 for attn_activations
     attn_activations = {
+        "q_proj_activated": torch.zeros(num_layers, 2048, dtype=torch.int32),
         "q_proj_sums": torch.zeros(num_layers, 2048, dtype=torch.float32),
         "q_proj_counts": torch.zeros(num_layers, dtype=torch.int32),
+        "k_proj_activated": torch.zeros(num_layers, 512, dtype=torch.int32),
         "k_proj_sums": torch.zeros(num_layers, 512, dtype=torch.float32),
         "k_proj_counts": torch.zeros(num_layers, dtype=torch.int32),
+        "v_proj_activated": torch.zeros(num_layers, 512, dtype=torch.int32),
         "v_proj_sums": torch.zeros(num_layers, 512, dtype=torch.float32),
         "v_proj_counts": torch.zeros(num_layers, dtype=torch.int32),
     }
@@ -83,9 +86,12 @@ def attach_hooks(cfg, model: torch.nn.Module, mlp_activations: dict[str, torch.T
             print(f"Skipping layer {i} because it does not have q, k, v projections")
             continue
 
+        # TODO
+        att_activation_threshold = 0.1
         def attn_hook_fn(module_name, layer_idx, module, inputs, output):
             with torch.no_grad():
                 safe_out = _safe_float_tensor(output)
+                attn_activations[f"{module_name}_activated"][layer_idx, :] += (safe_out.abs() > att_activation_threshold).sum(dim=(0, 1)).cpu()
                 attn_activations[f"{module_name}_sums"][layer_idx, :] += safe_out.abs().sum(dim=(0, 1)).cpu()
                 attn_activations[f"{module_name}_counts"][layer_idx] += output.size(0) * output.size(1)
                 
@@ -104,23 +110,17 @@ def save_activations(mlp_activations, attn_activations, lang: str, save_dir: str
         mlp_activations["activation_sums"] / mlp_counts,
         torch.zeros_like(mlp_activations["activation_sums"]),
     )
-    attn_average_activations = {
-        "q_proj_average": torch.where(
-            attn_activations["q_proj_counts"].unsqueeze(1) > 0,
-            attn_activations["q_proj_sums"] / attn_activations["q_proj_counts"].unsqueeze(1).float(),
-            torch.zeros_like(attn_activations["q_proj_sums"]),
-        ),
-        "k_proj_average": torch.where(
-            attn_activations["k_proj_counts"].unsqueeze(1) > 0,
-            attn_activations["k_proj_sums"] / attn_activations["k_proj_counts"].unsqueeze(1).float(),
-            torch.zeros_like(attn_activations["k_proj_sums"]),
-        ),
-        "v_proj_average": torch.where(
-            attn_activations["v_proj_counts"].unsqueeze(1) > 0,
-            attn_activations["v_proj_sums"] / attn_activations["v_proj_counts"].unsqueeze(1).float(),
-            torch.zeros_like(attn_activations["v_proj_sums"]),
-        ),
-    }
+    attn_average_activations = {}
+    for t in ['q', 'k', 'v']:
+        attn_average_activations[f"{t}_proj_average"] = torch.where(
+            attn_activations[f"{t}_proj_counts"].unsqueeze(1) > 0,
+            attn_activations[f"{t}_proj_sums"] / attn_activations[f"{t}_proj_counts"].unsqueeze(1).float(),
+            torch.zeros_like(attn_activations[f"{t}_proj_sums"]),
+        )
+        attn_average_activations[f"{t}_proj_activation_rate"] = attn_activations[f"{t}_proj_activated"] / attn_activations[f"{t}_proj_counts"].unsqueeze(1).float()
+
+
+
 
     output = dict(
         n=size,
