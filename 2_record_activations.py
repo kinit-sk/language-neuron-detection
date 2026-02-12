@@ -133,13 +133,7 @@ def save_activations(
     output = dict(
         n=size,
         mlp_grad_average_activations=mlp_grad_average.to("cpu"),
-        mlp_grad_activation_counts=mlp_grad_stats["counts"].to("cpu"),
         attn_grad_average_activations={k: v.to("cpu") for k, v in attn_grad_average.items()},
-        attn_grad_activation_counts={
-            "q_proj_counts": attn_grad_stats["q_proj"]["counts"].to("cpu"),
-            "k_proj_counts": attn_grad_stats["k_proj"]["counts"].to("cpu"),
-            "v_proj_counts": attn_grad_stats["v_proj"]["counts"].to("cpu"),
-        },
     )
 
     os.makedirs(save_dir, exist_ok=True)
