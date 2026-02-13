@@ -34,7 +34,7 @@ identify_neurons: # identify neurons
     run: true
     batch_size: 1
     chunk_size: 4096
-    max_tokens: 8192 # -1 means no limit
+    max_tokens: 4096 # -1 # means no limit
     variant: "gate" 
     gated_up_act_treshold: 0.1
     save_dir: "data/activations"

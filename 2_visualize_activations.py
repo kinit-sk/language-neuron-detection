@@ -49,8 +49,8 @@ class ActivationVisualizer:
                 activations_by_type[key][lang] = (layer_means, global_mean)
 
             # Attention activations
-            if "attn_average_activations" in data and isinstance(data["attn_average_activations"], dict):
-                for key, proj_acts in data["attn_average_activations"].items():
+            if "attn_grad_average_activations" in data and isinstance(data["attn_grad_average_activations"], dict):
+                for key, proj_acts in data["attn_grad_average_activations"].items():
                     if not torch.is_tensor(proj_acts):
                         continue
                     layer_means, global_mean = self._compute_layer_stats(proj_acts)
