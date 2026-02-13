@@ -111,7 +111,7 @@ def _compute_average(stats: dict[str, torch.Tensor]) -> torch.Tensor:
     counts = stats["counts"].unsqueeze(1).float()
     return torch.where(
         counts > 0,
-        stats["sums"] / counts,
+        stats["sums"], # / counts # we dont divide by counts because grads are tiny
         torch.zeros_like(stats["sums"]),
     )
 

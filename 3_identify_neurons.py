@@ -1,0 +1,155 @@
+import os
+from typing import Any
+
+import hydra
+import torch
+from omegaconf import DictConfig
+
+
+def _safe_abs(x: torch.Tensor) -> torch.Tensor:
+    x = torch.nan_to_num(x.float(), nan=0.0, posinf=0.0, neginf=0.0)
+    return x.abs()
+
+
+def _load_language_activation(path: str) -> dict[str, Any]:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Activation file not found: {path}")
+    data = torch.load(path, map_location="cpu")
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid activation file format: {path}")
+    return data
+
+
+def _collect_activation_tensors(load_dir: str, languages: list[str]) -> dict[str, torch.Tensor]:
+    by_lang: dict[str, dict[str, torch.Tensor]] = {}
+    common_keys: set[str] | None = None
+
+    for lang in languages:
+        data = _load_language_activation(os.path.join(load_dir, f"{lang}.pt"))
+        lang_tensors: dict[str, torch.Tensor] = {}
+
+        mlp = data.get("mlp_grad_average_activations")
+        if torch.is_tensor(mlp):
+            lang_tensors["mlp_grad_average_activations"] = _safe_abs(mlp)
+
+        attn = data.get("attn_grad_average_activations")
+        if isinstance(attn, dict):
+            for proj_name, proj_tensor in attn.items():
+                if torch.is_tensor(proj_tensor):
+                    lang_tensors[f"attn_{proj_name}_average_activations"] = _safe_abs(proj_tensor)
+
+        if not lang_tensors:
+            raise ValueError(f"No valid activation tensors found for language: {lang}")
+
+        by_lang[lang] = lang_tensors
+        lang_keys = set(lang_tensors.keys())
+        common_keys = lang_keys if common_keys is None else (common_keys & lang_keys)
+
+    if not common_keys:
+        raise ValueError("No common activation tensor keys across all languages")
+
+    stacked: dict[str, torch.Tensor] = {}
+    for key in sorted(common_keys):
+        tensors = [by_lang[lang][key] for lang in languages]
+        if any(t.shape != tensors[0].shape for t in tensors):
+            raise ValueError(f"Shape mismatch for key '{key}' across languages")
+        stacked[key] = torch.stack(tensors, dim=0).contiguous()
+
+    return stacked
+
+
+def _lape_select(
+    stacked: torch.Tensor,
+    top_rate: float,
+    filter_rate: float,
+    activation_bar_ratio: float,
+) -> dict[str, torch.Tensor]:
+    n_lang, n_layers, width = stacked.shape
+    top_k = max(1, int(width * top_rate))
+    eps = 1e-12
+
+    lang_sum = stacked.sum(dim=0, keepdim=True) + eps
+    lang_ratio = stacked / lang_sum
+
+    bars = torch.quantile(stacked, q=activation_bar_ratio, dim=2, keepdim=True)
+    strong_mask = stacked >= bars
+    specific_mask = lang_ratio >= filter_rate
+    candidate_mask = strong_mask & specific_mask
+
+    score = stacked * lang_ratio
+    masked_score = torch.where(candidate_mask, score, torch.full_like(score, -1.0))
+
+    top_scores, top_indices = torch.topk(masked_score, k=top_k, dim=2, largest=True, sorted=True)
+    top_valid = top_scores >= 0.0
+
+    selected_mask = torch.zeros_like(candidate_mask, dtype=torch.bool)
+    selected_mask.scatter_(2, top_indices, top_valid)
+
+    return {
+        "selected_mask": selected_mask,
+        "top_indices": top_indices,
+        "top_scores": torch.where(top_valid, top_scores, torch.zeros_like(top_scores)),
+        "top_valid": top_valid,
+        "counts_per_lang_layer": selected_mask.sum(dim=2),
+    }
+
+
+def _build_serializable_index_lists(selected_mask: torch.Tensor, languages: list[str]) -> dict[str, list[list[int]]]:
+    out: dict[str, list[list[int]]] = {}
+    for lang_idx, lang in enumerate(languages):
+        per_layer: list[list[int]] = []
+        for layer_idx in range(selected_mask.size(1)):
+            indices = torch.nonzero(selected_mask[lang_idx, layer_idx], as_tuple=False).squeeze(1).tolist()
+            per_layer.append(indices)
+        out[lang] = per_layer
+    return out
+
+
+@hydra.main(version_base=None, config_path="configs", config_name="default")
+def main(cfg: DictConfig):
+    load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
+    if not os.path.isdir(load_dir):
+        raise FileNotFoundError(f"Activation directory not found: {load_dir}")
+
+    languages = list(cfg.main.languages)
+    top_rate = float(cfg.identify_neurons.select_neurons.top_rate)
+    filter_rate = float(cfg.identify_neurons.select_neurons.filter_rate)
+    activation_bar_ratio = float(cfg.identify_neurons.select_neurons.activation_bar_ratio)
+
+    stacked_by_key = _collect_activation_tensors(load_dir, languages)
+
+    results: dict[str, dict[str, Any]] = {}
+    for key, stacked in stacked_by_key.items():
+        lape = _lape_select(
+            stacked=stacked,
+            top_rate=top_rate,
+            filter_rate=filter_rate,
+            activation_bar_ratio=activation_bar_ratio,
+        )
+        results[key] = {
+            "selected_mask": lape["selected_mask"],
+            "counts_per_lang_layer": lape["counts_per_lang_layer"],
+            "top_indices": lape["top_indices"],
+            "top_scores": lape["top_scores"],
+            "top_valid": lape["top_valid"],
+            "selected_indices_by_language": _build_serializable_index_lists(lape["selected_mask"], languages),
+        }
+
+    out = {
+        "method": "LAPE",
+        "languages": languages,
+        "params": {
+            "top_rate": top_rate,
+            "filter_rate": filter_rate,
+            "activation_bar_ratio": activation_bar_ratio,
+        },
+        "results": results,
+    }
+
+    save_path = os.path.join(load_dir, "lape_selected_neurons.pt")
+    torch.save(out, save_path)
+    print(f"Saved selected neurons to {save_path}")
+
+
+if __name__ == "__main__":
+    main()
