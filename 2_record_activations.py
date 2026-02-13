@@ -29,7 +29,7 @@ def _init_stats(num_layers: int, width: int) -> dict[str, torch.Tensor]:
 def _accumulate_act_grad(stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor, grad: torch.Tensor):
     act_grad = _safe_float_tensor(act.detach()) * _safe_float_tensor(grad)
     with torch.no_grad():
-        stats["sums"][layer_idx] += act_grad.sum(dim=(0, 1)).cpu()
+        stats["sums"][layer_idx] += act_grad.abs().sum(dim=(0, 1)).cpu()
         stats["counts"][layer_idx] += act_grad.size(0) * act_grad.size(1)
 
 
