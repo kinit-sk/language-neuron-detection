@@ -38,7 +38,6 @@ def main(cfg: DictConfig):
         tokens_file_path = os.path.join(save_path, f"{lang}.pt")
         torch.save(tensor_data, tokens_file_path)
         print(f"\n Saved tokenized data to {tokens_file_path} / ({len(tensor_data)} tokens)")
-        print("=======================") 
              
 
 if __name__ == "__main__":
