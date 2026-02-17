@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import hydra
+import matplotlib.pyplot as plt
+import seaborn as sns
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
@@ -237,6 +239,44 @@ def _save_matrix_csv(path: str, row_langs: list[str], col_langs: list[str], matr
             writer.writerow(row)
 
 
+def _save_heatmap_from_csv(csv_path: str, png_path: str):
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+
+    if len(rows) < 2 or len(rows[0]) < 2:
+        raise ValueError(f"CSV does not contain a valid matrix: {csv_path}")
+
+    col_langs = rows[0][1:]
+    row_langs: list[str] = []
+    values: list[list[float]] = []
+
+    for row in rows[1:]:
+        if len(row) != len(col_langs) + 1:
+            raise ValueError(f"Malformed CSV row in {csv_path}: {row}")
+        row_langs.append(row[0])
+        values.append([float(v) for v in row[1:]])
+
+    fig_w = max(8.0, 1.0 + 0.9 * len(col_langs))
+    fig_h = max(6.0, 1.0 + 0.7 * len(row_langs))
+    plt.figure(figsize=(fig_w, fig_h))
+    ax = sns.heatmap(
+        values,
+        xticklabels=col_langs,
+        yticklabels=row_langs,
+        cmap="viridis",
+        annot=True,
+        fmt=".2f",
+        cbar_kws={"label": "Perplexity"},
+    )
+    ax.set_xlabel("Evaluation language")
+    ax.set_ylabel("Ablated language")
+    ax.set_title("Perplexity Matrix After Language-Specific Neuron Ablation")
+    plt.tight_layout()
+    plt.savefig(png_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     eval_cfg = cfg.identify_neurons.evaluate_identified_neurons
@@ -293,6 +333,8 @@ def main(cfg: DictConfig):
 
     csv_path = os.path.join(save_dir, "perplexity_matrix.csv")
     _save_matrix_csv(csv_path, row_languages, col_languages, matrix)
+    png_path = os.path.join(save_dir, "perplexity_matrix.png")
+    _save_heatmap_from_csv(csv_path, png_path)
 
     result_payload = {
         "selected_neurons_path": selected_path,
@@ -317,6 +359,7 @@ def main(cfg: DictConfig):
     pt_path = os.path.join(save_dir, "perplexity_matrix.pt")
     torch.save(result_payload, pt_path)
     print(f"Saved matrix CSV to {csv_path}")
+    print(f"Saved heatmap PNG to {png_path}")
     print(f"Saved matrix artifact to {pt_path}")
 
 
