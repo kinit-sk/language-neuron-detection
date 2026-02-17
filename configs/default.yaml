@@ -45,6 +45,22 @@ identify_neurons: # identify neurons
     filter_rate: 0.95 # TODO: This is way to high. This is activation threshold. Activations are tiny becasue we use gradients to obtain them
     activation_bar_ratio: 0.95
 
+  evaluate_identified_neurons:
+    run: true
+    selected_neurons_path: null # null -> uses data/activations/<ex_id>/lape_selected_neurons.pt
+    save_dir: "outputs/identified_neurons_eval"
+    eval_languages: null # null -> uses main.languages
+    target_num_tokens: 131072
+    seq_len: 1024
+    batch_size: 1
+    dataset:
+      path: "HuggingFaceFW/fineweb-2"
+      split: "train"
+      streaming: true
+      text_field: "text"
+      english_path: "HuggingFaceFW/fineweb" # used only for eng_Latn
+      english_name: "default"
+
   visualize:
     neurons_per_layer: true
     neuron_overlap: true

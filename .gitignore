@@ -5,6 +5,7 @@ finetuning_impl/__pycache__
 data/*
 outputs/*
 mlruns/*
+prompts/*
  
  
 .python-version
