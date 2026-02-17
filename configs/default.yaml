@@ -41,8 +41,8 @@ identify_neurons: # identify neurons
 
   select_neurons: # LAPE
     run: true
-    top_rate: 0.01
-    filter_rate: 0.95 # TODO: This is way to high. This is activation threshold. Activations are tiny becasue we use gradients to obtain them
+    top_rate: 0.01 # Select only 1% of the neurons
+    filter_rate: 0.1 # Minimum activation value to consider neuron
     activation_bar_ratio: 0.95
 
   evaluate_identified_neurons:

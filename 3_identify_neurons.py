@@ -105,6 +105,21 @@ def _build_serializable_index_lists(selected_mask: torch.Tensor, languages: list
     return out
 
 
+def _log_selection_stats(key: str, selected_mask: torch.Tensor, languages: list[str]) -> tuple[torch.Tensor, int]:
+    n_layers = selected_mask.size(1)
+    width = selected_mask.size(2)
+    total_neurons_per_lang = n_layers * width
+    counts_per_lang = selected_mask.sum(dim=(1, 2))
+
+    print(f"[{key}] language-specific neuron stats:")
+    for lang_idx, lang in enumerate(languages):
+        count = int(counts_per_lang[lang_idx].item())
+        pct = (count / total_neurons_per_lang) * 100.0 if total_neurons_per_lang > 0 else 0.0
+        print(f"  - {lang}: {count}/{total_neurons_per_lang} ({pct:.2f}%)")
+
+    return counts_per_lang, total_neurons_per_lang
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
@@ -119,6 +134,8 @@ def main(cfg: DictConfig):
     stacked_by_key = _collect_activation_tensors(load_dir, languages)
 
     results: dict[str, dict[str, Any]] = {}
+    aggregate_counts_per_lang = torch.zeros(len(languages), dtype=torch.long)
+    aggregate_total_neurons_per_lang = 0
     for key, stacked in stacked_by_key.items():
         lape = _lape_select(
             stacked=stacked,
@@ -134,6 +151,15 @@ def main(cfg: DictConfig):
             "top_valid": lape["top_valid"],
             "selected_indices_by_language": _build_serializable_index_lists(lape["selected_mask"], languages),
         }
+        key_counts, key_total = _log_selection_stats(key, lape["selected_mask"], languages)
+        aggregate_counts_per_lang += key_counts.to(torch.long)
+        aggregate_total_neurons_per_lang += key_total
+
+    print("[overall] language-specific neuron stats across all activation groups:")
+    for lang_idx, lang in enumerate(languages):
+        count = int(aggregate_counts_per_lang[lang_idx].item())
+        pct = (count / aggregate_total_neurons_per_lang) * 100.0 if aggregate_total_neurons_per_lang > 0 else 0.0
+        print(f"  - {lang}: {count}/{aggregate_total_neurons_per_lang} ({pct:.2f}%)")
 
     out = {
         "method": "LAPE",

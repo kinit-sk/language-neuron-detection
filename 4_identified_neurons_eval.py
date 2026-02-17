@@ -266,7 +266,7 @@ def _save_heatmap_from_csv(csv_path: str, png_path: str):
         yticklabels=row_langs,
         cmap="viridis",
         annot=True,
-        fmt=".2f",
+        fmt=".0f",
         cbar_kws={"label": "Perplexity"},
     )
     ax.set_xlabel("Evaluation language")
