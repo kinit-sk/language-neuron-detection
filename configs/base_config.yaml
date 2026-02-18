@@ -10,7 +10,7 @@ build_order:
   - trainer
 
 args:
-  output_dir: "outputs"
+  output_dir: "data/finetuning"
   num_train_examples: 20000
   num_val_examples: 100
   model: "Qwen/Qwen2.5-1.5B-Instruct"

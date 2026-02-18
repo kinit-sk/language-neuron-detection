@@ -143,6 +143,8 @@ def main(cfg: DictConfig):
     load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
     if not os.path.isdir(load_dir):
         raise FileNotFoundError(f"Activation directory not found: {load_dir}")
+    save_dir = os.path.join(cfg.identify_neurons.select_neurons.save_dir, cfg.main.ex_id)
+    os.makedirs(save_dir, exist_ok=True)
 
     languages = list(cfg.main.languages)
     recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
@@ -192,7 +194,7 @@ def main(cfg: DictConfig):
         "results": results,
     }
 
-    save_path = os.path.join(load_dir, "lape_selected_neurons.pt")
+    save_path = os.path.join(save_dir, "lape_selected_neurons.pt")
     torch.save(out, save_path)
     print(f"Saved selected neurons to {save_path}")
 

@@ -10,9 +10,10 @@ from omegaconf import DictConfig
 
 
 class ActivationVisualizer:
-    def __init__(self, load_dir: str, langs: list[str], recording_strategy: str):
+    def __init__(self, load_dir: str, out_dir: str, langs: list[str], recording_strategy: str):
         self.langs = langs
         self.load_dir = load_dir
+        self.out_dir = out_dir
         self.recording_strategy = recording_strategy
 
     def load_activation_data(self, lang):
@@ -88,6 +89,7 @@ class ActivationVisualizer:
             print("No data to visualize.")
             return
 
+        os.makedirs(self.out_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         for key, per_lang in activations_by_type.items():
             values, y_labels, x_labels = self._build_heatmap_data(per_lang)
@@ -121,7 +123,7 @@ class ActivationVisualizer:
             plt.tight_layout()
 
             filename = os.path.join(
-                self.load_dir,
+                self.out_dir,
                 f"{timestamp}-{key}-{self.recording_strategy}.png",
             )
             plt.savefig(filename, dpi=200)
@@ -130,7 +132,7 @@ class ActivationVisualizer:
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
 
-    save_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
+    load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
     default_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
     visualize_cfg = cfg.identify_neurons.record_activations.get("visualize", None)
     recording_strategy = (
@@ -138,8 +140,15 @@ def main(cfg: DictConfig):
         if visualize_cfg is not None
         else default_strategy
     )
+    out_base_dir = (
+        visualize_cfg.get("save_dir", cfg.identify_neurons.record_activations.save_dir)
+        if visualize_cfg is not None
+        else cfg.identify_neurons.record_activations.save_dir
+    )
+    out_dir = os.path.join(out_base_dir, cfg.main.ex_id)
     visualizer = ActivationVisualizer(
-        save_dir,
+        load_dir,
+        out_dir,
         cfg.main.languages,
         recording_strategy,
     )

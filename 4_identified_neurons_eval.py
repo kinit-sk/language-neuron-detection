@@ -37,7 +37,7 @@ def _resolve_selected_neurons_path(cfg: DictConfig) -> str:
     if override_path:
         return str(override_path)
     return os.path.join(
-        cfg.identify_neurons.record_activations.save_dir,
+        cfg.identify_neurons.select_neurons.save_dir,
         cfg.main.ex_id,
         "lape_selected_neurons.pt",
     )
