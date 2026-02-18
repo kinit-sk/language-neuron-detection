@@ -29,6 +29,10 @@ identify_neurons: # identify neurons
   select_neurons: # LAPE
     top_rate: 0.01 # Select only 1% of the neurons
     filter_rate: 0.1 # Minimum activation value to consider neuron
+
+    filter_rate_by_strategy:
+      grad_act: 0.1
+      act: 0.1
     activation_bar_ratio: 0.95
 
   evaluate_identified_neurons:

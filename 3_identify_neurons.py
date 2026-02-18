@@ -130,6 +130,14 @@ def _log_selection_stats(key: str, selected_mask: torch.Tensor, languages: list[
     return counts_per_lang, total_neurons_per_lang
 
 
+def _resolve_filter_rate(cfg: DictConfig, recording_strategy: str) -> float:
+    select_cfg = cfg.identify_neurons.select_neurons
+    by_strategy = select_cfg.get("filter_rate_by_strategy", None)
+    if by_strategy is not None and recording_strategy in by_strategy:
+        return float(by_strategy[recording_strategy])
+    return float(select_cfg.filter_rate)
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
@@ -139,7 +147,7 @@ def main(cfg: DictConfig):
     languages = list(cfg.main.languages)
     recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
     top_rate = float(cfg.identify_neurons.select_neurons.top_rate)
-    filter_rate = float(cfg.identify_neurons.select_neurons.filter_rate)
+    filter_rate = _resolve_filter_rate(cfg, recording_strategy)
     activation_bar_ratio = float(cfg.identify_neurons.select_neurons.activation_bar_ratio)
 
     stacked_by_key = _collect_activation_tensors(load_dir, languages, recording_strategy)
@@ -176,6 +184,7 @@ def main(cfg: DictConfig):
         "method": "LAPE",
         "languages": languages,
         "params": {
+            "recording_strategy": recording_strategy,
             "top_rate": top_rate,
             "filter_rate": filter_rate,
             "activation_bar_ratio": activation_bar_ratio,
