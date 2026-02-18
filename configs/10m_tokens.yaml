@@ -19,8 +19,11 @@ identify_neurons: # identify neurons
     batch_size: 1
     chunk_size: 4096
     max_tokens: 4096 # -1 # means no limit
+    recording_strategy: "act"
     variant: "gate" 
     save_dir: "data/activations"
+    visualize:
+      recording_strategy: "grad_act"
 
   select_neurons: # LAPE
     top_rate: 0.01 # Select only 1% of the neurons

@@ -20,12 +20,22 @@ def _load_language_activation(path: str) -> dict[str, Any]:
     return data
 
 
-def _collect_activation_tensors(load_dir: str, languages: list[str]) -> dict[str, torch.Tensor]:
+def _resolve_activation_path(load_dir: str, lang: str, recording_strategy: str) -> str:
+    strategy_path = os.path.join(load_dir, f"{lang}_{recording_strategy}.pt")
+    if os.path.exists(strategy_path):
+        return strategy_path
+    legacy_path = os.path.join(load_dir, f"{lang}.pt")
+    if os.path.exists(legacy_path):
+        return legacy_path
+    return strategy_path
+
+
+def _collect_activation_tensors(load_dir: str, languages: list[str], recording_strategy: str) -> dict[str, torch.Tensor]:
     by_lang: dict[str, dict[str, torch.Tensor]] = {}
     common_keys: set[str] | None = None
 
     for lang in languages:
-        data = _load_language_activation(os.path.join(load_dir, f"{lang}.pt"))
+        data = _load_language_activation(_resolve_activation_path(load_dir, lang, recording_strategy))
         lang_tensors: dict[str, torch.Tensor] = {}
 
         mlp = data.get("mlp_grad_average_activations")
@@ -127,11 +137,12 @@ def main(cfg: DictConfig):
         raise FileNotFoundError(f"Activation directory not found: {load_dir}")
 
     languages = list(cfg.main.languages)
+    recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
     top_rate = float(cfg.identify_neurons.select_neurons.top_rate)
     filter_rate = float(cfg.identify_neurons.select_neurons.filter_rate)
     activation_bar_ratio = float(cfg.identify_neurons.select_neurons.activation_bar_ratio)
 
-    stacked_by_key = _collect_activation_tensors(load_dir, languages)
+    stacked_by_key = _collect_activation_tensors(load_dir, languages, recording_strategy)
 
     results: dict[str, dict[str, Any]] = {}
     aggregate_counts_per_lang = torch.zeros(len(languages), dtype=torch.long)

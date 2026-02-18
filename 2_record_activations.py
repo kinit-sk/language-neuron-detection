@@ -33,6 +33,13 @@ def _accumulate_act_grad(stats: dict[str, torch.Tensor], layer_idx: int, act: to
         stats["counts"][layer_idx] += act_grad.size(0) * act_grad.size(1)
 
 
+def _accumulate_act(stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor):
+    act = _safe_float_tensor(act.detach())
+    with torch.no_grad():
+        stats["sums"][layer_idx] += act.abs().sum(dim=(0, 1)).cpu()
+        stats["counts"][layer_idx] += act.size(0) * act.size(1)
+
+
 def register_mlp_patched_forward(
     cfg: DictConfig,
     mlp: torch.nn.Module,
@@ -40,6 +47,7 @@ def register_mlp_patched_forward(
     mlp_grad_stats: dict[str, torch.Tensor],
 ):
     variant = cfg.identify_neurons.record_activations.variant
+    recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
     original_forward = mlp.forward
 
     def patched_forward(self, x):
@@ -49,10 +57,18 @@ def register_mlp_patched_forward(
         gated = gate_act * up
         tracked = gate_act if variant == "gate" else gated
 
-        def grad_hook_fn(grad):
-            _accumulate_act_grad(mlp_grad_stats, layer_idx, tracked, grad)
+        if recording_strategy == "grad_act":
+            def grad_hook_fn(grad):
+                _accumulate_act_grad(mlp_grad_stats, layer_idx, tracked, grad)
 
-        tracked.register_hook(grad_hook_fn)
+            tracked.register_hook(grad_hook_fn)
+        elif recording_strategy == "act":
+            _accumulate_act(mlp_grad_stats, layer_idx, tracked)
+        else:
+            raise ValueError(
+                f"Unsupported recording_strategy='{recording_strategy}'. "
+                "Supported strategies are: 'grad_act', 'act'."
+            )
         return self.down_proj(gated)
 
     mlp.forward = types.MethodType(patched_forward, mlp)
@@ -60,15 +76,26 @@ def register_mlp_patched_forward(
 
 
 def register_attn_hooks(
+    cfg: DictConfig,
     layer: torch.nn.Module,
     layer_idx: int,
     attn_grad_stats: dict[str, dict[str, torch.Tensor]],
 ):
-    def attn_hook_fn(module_name: str, _layer_idx: int, _module: torch.nn.Module, _inputs, output: torch.Tensor):
-        def grad_hook_fn(grad):
-            _accumulate_act_grad(attn_grad_stats[module_name], _layer_idx, output, grad)
+    recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
 
-        output.register_hook(grad_hook_fn)
+    def attn_hook_fn(module_name: str, _layer_idx: int, _module: torch.nn.Module, _inputs, output: torch.Tensor):
+        if recording_strategy == "grad_act":
+            def grad_hook_fn(grad):
+                _accumulate_act_grad(attn_grad_stats[module_name], _layer_idx, output, grad)
+
+            output.register_hook(grad_hook_fn)
+        elif recording_strategy == "act":
+            _accumulate_act(attn_grad_stats[module_name], _layer_idx, output)
+        else:
+            raise ValueError(
+                f"Unsupported recording_strategy='{recording_strategy}'. "
+                "Supported strategies are: 'grad_act', 'act'."
+            )
 
     return [
         layer.self_attn.q_proj.register_forward_hook(partial(attn_hook_fn, "q_proj", layer_idx)),
@@ -102,7 +129,7 @@ def attach_hooks(
         if not hasattr(layer, "self_attn") or not hasattr(layer.self_attn, "q_proj") or not hasattr(layer.self_attn, "k_proj") or not hasattr(layer.self_attn, "v_proj"):
             print(f"Skipping layer {i} because it does not have q, k, v projections")
             continue
-        handles.extend(register_attn_hooks(layer, i, attn_grad_stats))
+        handles.extend(register_attn_hooks(cfg, layer, i, attn_grad_stats))
 
     return handles, original_mlp_forwards
 
@@ -122,6 +149,7 @@ def save_activations(
     lang: str,
     save_dir: str,
     size: int,
+    recording_strategy: str,
 ):
     mlp_grad_average = _compute_average(mlp_grad_stats)
     attn_grad_average = {
@@ -132,12 +160,13 @@ def save_activations(
 
     output = dict(
         n=size,
+        recording_strategy=recording_strategy,
         mlp_grad_average_activations=mlp_grad_average.to("cpu"),
         attn_grad_average_activations={k: v.to("cpu") for k, v in attn_grad_average.items()},
     )
 
     os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, f"{lang}.pt")
+    save_path = os.path.join(save_dir, f"{lang}_{recording_strategy}.pt")
     torch.save(output, save_path)
     print(f"Saved activations to {save_path}/\n")
 
@@ -155,6 +184,12 @@ def main(cfg: DictConfig):
 
     chunk_size = cfg.identify_neurons.record_activations.chunk_size
     batch_size = cfg.identify_neurons.record_activations.batch_size
+    recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
+    if recording_strategy not in {"grad_act", "act"}:
+        raise ValueError(
+            f"Unsupported recording_strategy='{recording_strategy}'. "
+            "Supported strategies are: 'grad_act', 'act'."
+        )
     num_layers = len(model.model.layers)
     intermediate_size = model.model.layers[0].mlp.gate_proj.out_features
     q_size = model.model.layers[0].self_attn.q_proj.out_features
@@ -180,17 +215,21 @@ def main(cfg: DictConfig):
             if batch.size(1) < 2:
                 continue
 
-            model.zero_grad(set_to_none=True)
-            outputs = model(batch, use_cache=False)
-            logits = outputs.logits.float()
-            target = batch[:, 1:]
-            pred = logits[:, :-1, :]
-            token_logprobs = F.log_softmax(pred, dim=-1).gather(-1, target.unsqueeze(-1)).squeeze(-1)
-            scalar_objective = token_logprobs.mean()
-            scalar_objective.backward()
+            if recording_strategy == "grad_act":
+                model.zero_grad(set_to_none=True)
+                outputs = model(batch, use_cache=False)
+                logits = outputs.logits.float()
+                target = batch[:, 1:]
+                pred = logits[:, :-1, :]
+                token_logprobs = F.log_softmax(pred, dim=-1).gather(-1, target.unsqueeze(-1)).squeeze(-1)
+                scalar_objective = token_logprobs.mean()
+                scalar_objective.backward()
+            else:
+                with torch.no_grad():
+                    model(batch, use_cache=False)
 
         save_path = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
-        save_activations(mlp_grad_stats, attn_grad_stats, lang, save_path, ids.size(0))
+        save_activations(mlp_grad_stats, attn_grad_stats, lang, save_path, ids.size(0), recording_strategy)
 
         for h in handles:
             h.remove()

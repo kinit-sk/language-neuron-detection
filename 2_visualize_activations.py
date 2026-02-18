@@ -10,14 +10,21 @@ from omegaconf import DictConfig
 
 
 class ActivationVisualizer:
-    def __init__(self, load_dir: str, langs: list[str]):
+    def __init__(self, load_dir: str, langs: list[str], recording_strategy: str):
         self.langs = langs
         self.load_dir = load_dir
+        self.recording_strategy = recording_strategy
 
     def load_activation_data(self, lang):
-        file_path = os.path.join(self.load_dir, f'{lang}.pt')
+        file_path = os.path.join(self.load_dir, f"{lang}_{self.recording_strategy}.pt")
         if not os.path.exists(file_path):
-            print(f"File not found for {lang}: {file_path}")
+            legacy_path = os.path.join(self.load_dir, f"{lang}.pt")
+            if os.path.exists(legacy_path):
+                file_path = legacy_path
+            else:
+                print(f"File not found for {lang}: {file_path}")
+                return None
+        if not os.path.exists(file_path):
             return None
         return torch.load(file_path, map_location="cpu")
 
@@ -121,9 +128,17 @@ class ActivationVisualizer:
 def main(cfg: DictConfig):
 
     save_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
+    default_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
+    visualize_cfg = cfg.identify_neurons.record_activations.get("visualize", None)
+    recording_strategy = (
+        visualize_cfg.get("recording_strategy", default_strategy)
+        if visualize_cfg is not None
+        else default_strategy
+    )
     visualizer = ActivationVisualizer(
         save_dir,
-        cfg.main.languages
+        cfg.main.languages,
+        recording_strategy,
     )
     visualizer.visualize()
 
