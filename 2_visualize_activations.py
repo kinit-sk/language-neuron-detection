@@ -120,7 +120,10 @@ class ActivationVisualizer:
             plt.ylabel("Language")
             plt.tight_layout()
 
-            filename = os.path.join(self.load_dir, f"{timestamp}-{key}-activations.png")
+            filename = os.path.join(
+                self.load_dir,
+                f"{timestamp}-{key}-{self.recording_strategy}.png",
+            )
             plt.savefig(filename, dpi=200)
             print(f"Saved heatmap to {filename}")
 
