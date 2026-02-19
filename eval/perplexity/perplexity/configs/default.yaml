@@ -1,0 +1,25 @@
+model:
+  path: "meta-llama/Llama-3.2-1B"
+  tokenizer_path: "meta-llama/Llama-3.2-1B"
+
+evaluation:
+  dataset_hf_path: "tomasmajercik/flores-parquet"
+  max_length: 512
+  stride: 256
+  save_path: "results/perplexity"
+  streaming: true
+
+datasets:
+  eng_Latn:
+    path: ${evaluation.dataset_hf_path}
+    subset_name: "eng_Latn"
+    split: "validation"
+    text_field: "sentence"
+    max_samples: 1000
+    
+  slk_Latn:
+    path: ${evaluation.dataset_hf_path}
+    subset_name: "slk_Latn"
+    split: "validation"
+    text_field: "sentence"
+    max_samples: 1000
