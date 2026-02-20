@@ -7,12 +7,20 @@ from datasets import DownloadConfig, load_dataset
 from omegaconf import DictConfig
 from transformers import AutoTokenizer
 
+# Avoid native tokenizer worker threads surviving into interpreter shutdown.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+# Avoid optional native HF transfer backends that can keep extra threads/resources.
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 
 def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_tokens, max_retries=6):
     download_config = DownloadConfig(max_retries=max_retries)
 
     for attempt in range(1, max_retries + 1):
         tensor_ids = []
+        dataset = None
+        dataset_iter = None
         try:
             dataset = load_dataset(
                 dataset_name,
@@ -22,7 +30,8 @@ def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_to
                 download_config=download_config,
             )
 
-            for item in dataset:
+            dataset_iter = iter(dataset)
+            for item in dataset_iter:
                 tensor_ids.extend(tokenizer.encode(item["text"], add_special_tokens=False))
                 if len(tensor_ids) >= target_num_tokens:
                     return tensor_ids[:target_num_tokens], True
@@ -36,6 +45,14 @@ def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_to
                 raise
             # Exponential backoff for transient network/socket failures.
             time.sleep(min(2**attempt, 30))
+        finally:
+            for obj in (dataset_iter, dataset):
+                close = getattr(obj, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        pass
 
     return [], False
 
@@ -76,4 +93,19 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    main()
+    exit_code = 0
+    try:
+        main()
+    except Exception:
+        exit_code = 1
+        raise
+    finally:
+        # Bypass interpreter finalization, which is where the sporadic
+        # PyGILState_Release crash occurs in this environment.
+        try:
+            import sys
+
+            sys.stdout.flush()
+            sys.stderr.flush()
+        finally:
+            os._exit(exit_code)
