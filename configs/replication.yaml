@@ -23,7 +23,7 @@ identify_neurons: # identify neurons
     components:
       - mlp # - attn
     recording_strategy: "act" # options: "act", "grad_act"
-    variant: "gate" 
+    variant: "gate_up" # options: "gate", "gate_up"
     save_dir: "data/2_output"
 
     visualize:
@@ -37,7 +37,7 @@ identify_neurons: # identify neurons
 
     filter_rate_by_strategy:
       grad_act: 0.1
-      act: 0.1
+      act: 0.95
     activation_bar_ratio: 0.95
 
   evaluate_identified_neurons:

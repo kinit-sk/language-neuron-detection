@@ -15,10 +15,40 @@ from transformers import AutoModelForCausalLM
 from misc import get_device
 
 
-MLP_KEY = "mlp_grad_average_activations"
-ATTN_Q_KEY = "attn_q_proj_average_activations"
-ATTN_K_KEY = "attn_k_proj_average_activations"
-ATTN_V_KEY = "attn_v_proj_average_activations"
+MLP_KEYS = (
+    "mlp_grad_average_activations",
+    "mlp_over_threshold_rate",
+)
+ATTN_Q_KEYS = (
+    "attn_q_proj_grad_average_activations",
+    "attn_q_proj_over_threshold_rate",
+)
+ATTN_K_KEYS = (
+    "attn_k_proj_grad_average_activations",
+    "attn_k_proj_over_threshold_rate",
+)
+ATTN_V_KEYS = (
+    "attn_v_proj_grad_average_activations",
+    "attn_v_proj_over_threshold_rate",
+)
+
+COMPONENT_KEYS = {
+    "mlp": MLP_KEYS,
+    "attn_q": ATTN_Q_KEYS,
+    "attn_k": ATTN_K_KEYS,
+    "attn_v": ATTN_V_KEYS,
+}
+
+
+def _first_present_component(
+    selected_results: dict[str, Any],
+    candidate_keys: tuple[str, ...],
+) -> tuple[str, dict[str, Any]] | None:
+    for key in candidate_keys:
+        value = selected_results.get(key)
+        if isinstance(value, dict):
+            return key, value
+    return None
 
 
 @dataclass
@@ -104,10 +134,11 @@ def _build_component_masks(
     num_layers = len(layers)
     masks: dict[str, list[torch.Tensor | None]] = {}
 
-    for component_key in (MLP_KEY, ATTN_Q_KEY, ATTN_K_KEY, ATTN_V_KEY):
-        component = selected_results.get(component_key)
-        if not isinstance(component, dict):
+    for component_name, candidate_keys in COMPONENT_KEYS.items():
+        matched = _first_present_component(selected_results, candidate_keys)
+        if matched is None:
             continue
+        component_key, component = matched
         by_lang = component.get("selected_indices_by_language", {})
         per_layer_indices = by_lang.get(ablation_lang)
         if per_layer_indices is None:
@@ -123,11 +154,11 @@ def _build_component_masks(
             if not idx_list:
                 layer_masks.append(None)
                 continue
-            if component_key == MLP_KEY:
+            if component_name == "mlp":
                 width = layers[layer_idx].mlp.gate_proj.out_features
-            elif component_key == ATTN_Q_KEY:
+            elif component_name == "attn_q":
                 width = layers[layer_idx].self_attn.q_proj.out_features
-            elif component_key == ATTN_K_KEY:
+            elif component_name == "attn_k":
                 width = layers[layer_idx].self_attn.k_proj.out_features
             else:
                 width = layers[layer_idx].self_attn.v_proj.out_features
@@ -139,7 +170,7 @@ def _build_component_masks(
                 layer_masks.append(mask)
             else:
                 layer_masks.append(None)
-        masks[component_key] = layer_masks
+        masks[component_name] = layer_masks
 
     return masks
 
@@ -155,7 +186,7 @@ def _register_ablation_hooks(
     handles: list[Any] = []
 
     for layer_idx, layer in enumerate(layers):
-        mlp_mask = component_masks.get(MLP_KEY, [None] * len(layers))[layer_idx]
+        mlp_mask = component_masks.get("mlp", [None] * len(layers))[layer_idx]
         if mlp_mask is not None:
             handles.append(
                 layer.mlp.gate_proj.register_forward_hook(
@@ -163,7 +194,7 @@ def _register_ablation_hooks(
                 )
             )
 
-        q_mask = component_masks.get(ATTN_Q_KEY, [None] * len(layers))[layer_idx]
+        q_mask = component_masks.get("attn_q", [None] * len(layers))[layer_idx]
         if q_mask is not None:
             handles.append(
                 layer.self_attn.q_proj.register_forward_hook(
@@ -171,7 +202,7 @@ def _register_ablation_hooks(
                 )
             )
 
-        k_mask = component_masks.get(ATTN_K_KEY, [None] * len(layers))[layer_idx]
+        k_mask = component_masks.get("attn_k", [None] * len(layers))[layer_idx]
         if k_mask is not None:
             handles.append(
                 layer.self_attn.k_proj.register_forward_hook(
@@ -179,7 +210,7 @@ def _register_ablation_hooks(
                 )
             )
 
-        v_mask = component_masks.get(ATTN_V_KEY, [None] * len(layers))[layer_idx]
+        v_mask = component_masks.get("attn_v", [None] * len(layers))[layer_idx]
         if v_mask is not None:
             handles.append(
                 layer.self_attn.v_proj.register_forward_hook(
@@ -318,6 +349,11 @@ def main(cfg: DictConfig):
         print(f"Evaluating ablation language: {ablation_lang}")
         component_masks = _build_component_masks(selected, ablation_lang, layers)
         handles = _register_ablation_hooks(layers, component_masks)
+        if not handles:
+            print(
+                f"  WARNING: no ablation hooks registered for {ablation_lang}. "
+                "Check selected neuron artifact keys and language coverage."
+            )
 
         row_result: dict[str, float] = {}
         for eval_lang in col_languages:
