@@ -69,7 +69,12 @@ def register_mlp_patched_forward(
     layer_idx: int,
     mlp_grad_stats: dict[str, torch.Tensor],
 ):
-    variant = cfg.identify_neurons.record_activations.variant
+    variant_raw = str(cfg.identify_neurons.record_activations.variant).strip().lower()
+    if variant_raw == "gated_up":
+        variant_raw = "gate_up"
+    if variant_raw not in {"gate", "gate_up"}:
+        raise ValueError("record_activations.variant must be one of: 'gate', 'gate_up' (or alias 'gated_up')")
+    variant = variant_raw
     recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
     activation_threshold = float(cfg.identify_neurons.record_activations.get("activation_threshold", 0.0))
     original_forward = mlp.forward
@@ -87,7 +92,17 @@ def register_mlp_patched_forward(
 
             tracked.register_hook(grad_hook_fn)
         elif recording_strategy == "act":
-            _accumulate_act(mlp_grad_stats, layer_idx, tracked, activation_threshold)
+            with torch.no_grad():
+                if variant == "gate":
+                    mlp_grad_stats["sums"][layer_idx] += _safe_float_tensor(tracked.detach()).sum(dim=(0, 1)).cpu()
+                    mlp_grad_stats["over_threshold"][layer_idx] += (tracked > 0).sum(dim=(0, 1)).cpu()
+                else:
+                    tracked_clean = _safe_float_tensor(tracked.detach())
+                    mlp_grad_stats["sums"][layer_idx] += tracked_clean.sum(dim=(0, 1)).cpu()
+                    mlp_grad_stats["over_threshold"][layer_idx] += (
+                        tracked_clean.abs() > activation_threshold
+                    ).sum(dim=(0, 1)).cpu()
+                mlp_grad_stats["counts"][layer_idx] += tracked.size(0) * tracked.size(1)
         else:
             raise ValueError(
                 f"Unsupported recording_strategy='{recording_strategy}'. "

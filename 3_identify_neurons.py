@@ -118,7 +118,6 @@ def _lape_select(
     prefilter_bar = flat.kthvalue(k).values
     prefilter_mask = (stacked > prefilter_bar).any(dim=0, keepdim=True)
     neurons_after_filter_rate = int(prefilter_mask.sum().item())
-    import code; code.interact(local=dict(globals(), **locals()))
     print(f"Neurons after filter_rate + kthvalue filtration: {neurons_after_filter_rate}")
 
     lang_sum = stacked.sum(dim=0, keepdim=True) + eps
@@ -126,8 +125,7 @@ def _lape_select(
 
     bars = torch.quantile(stacked, q=activation_bar_ratio, dim=2, keepdim=True)
     strong_mask = stacked >= bars
-    specific_mask = lang_ratio >= filter_rate
-    candidate_mask = strong_mask & specific_mask & prefilter_mask
+    candidate_mask = strong_mask & prefilter_mask
 
     score = stacked * lang_ratio
     masked_score = torch.where(candidate_mask, score, torch.full_like(score, -1.0))

@@ -23,7 +23,7 @@ identify_neurons: # identify neurons
     components:
       - mlp # - attn
     recording_strategy: "act" # options: "act", "grad_act"
-    variant: "gate_up" # options: "gate", "gate_up"
+    variant: "gate" # options: "gate", "gate_up"
     save_dir: "data/2_output"
 
     visualize:
