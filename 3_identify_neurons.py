@@ -105,44 +105,55 @@ def _lape_select(
     activation_bar_ratio: float,
 ) -> dict[str, torch.Tensor]:
     n_lang, n_layers, width = stacked.shape
-    top_k = max(1, int(width * top_rate))
-    eps = 1e-12
-    total_neurons = n_layers * width
-    print(f"Total neurons before filtration: {total_neurons}")
+    activation_probs = stacked.permute(1, 2, 0).contiguous()  # layer x hidden x lang
+    largest = False
 
-    # Pre-filter globally low-activity neurons using a kthvalue threshold, then
-    # keep a neuron slot (layer, hidden) if at least one language exceeds it.
-    flat = stacked.flatten()
-    k = int(round(flat.numel() * filter_rate))
-    k = min(max(k, 1), flat.numel())
-    prefilter_bar = flat.kthvalue(k).values
-    prefilter_mask = (stacked > prefilter_bar).any(dim=0, keepdim=True)
-    neurons_after_filter_rate = int(prefilter_mask.sum().item())
-    print(f"Neurons after filter_rate + kthvalue filtration: {neurons_after_filter_rate}")
+    normed_activation_probs = activation_probs / activation_probs.sum(dim=-1, keepdim=True)
+    normed_activation_probs[torch.isnan(normed_activation_probs)] = 0
+    log_probs = torch.where(
+        normed_activation_probs > 0,
+        normed_activation_probs.log(),
+        torch.zeros_like(normed_activation_probs),
+    )
+    entropy = -torch.sum(normed_activation_probs * log_probs, dim=-1)
 
-    lang_sum = stacked.sum(dim=0, keepdim=True) + eps
-    lang_ratio = stacked / lang_sum
+    if torch.isnan(entropy).sum():
+        raise ValueError("NaN values found in entropy")
 
-    bars = torch.quantile(stacked, q=activation_bar_ratio, dim=2, keepdim=True)
-    strong_mask = stacked >= bars
-    candidate_mask = strong_mask & prefilter_mask
+    flattened_probs = activation_probs.flatten()
+    top_prob_k = round(len(flattened_probs) * filter_rate)
+    top_prob_value = flattened_probs.kthvalue(top_prob_k).values.item()
+    top_position = (activation_probs > top_prob_value).sum(dim=-1)
+    entropy[top_position == 0] = -torch.inf if largest else torch.inf
 
-    score = stacked * lang_ratio
-    masked_score = torch.where(candidate_mask, score, torch.full_like(score, -1.0))
+    flattened_entropy = entropy.flatten()
+    top_entropy_value = round(len(flattened_entropy) * top_rate)
+    _, index = flattened_entropy.topk(top_entropy_value, largest=largest)
+    row_index = index // entropy.size(1)
+    col_index = index % entropy.size(1)
+    selected_probs = activation_probs[row_index, col_index]  # n_selected x lang
 
-    top_scores, top_indices = torch.topk(masked_score, k=top_k, dim=2, largest=True, sorted=True)
-    top_valid = top_scores >= 0.0
+    selected_probs_by_lang = selected_probs.transpose(0, 1)  # lang x n_selected
+    activation_bar_k = round(len(flattened_probs) * activation_bar_ratio)
+    activation_bar = flattened_probs.kthvalue(activation_bar_k).values.item()
+    lang, indice = torch.where(selected_probs_by_lang > activation_bar)
+    merged_index = torch.stack((row_index, col_index), dim=-1)
 
-    selected_mask = torch.zeros_like(candidate_mask, dtype=torch.bool)
-    selected_mask.scatter_(2, top_indices, top_valid)
-    neurons_after_top_rate = int(selected_mask.any(dim=0).sum().item())
-    print(f"Neurons after top_rate filtration: {neurons_after_top_rate}")
+    selected_mask = torch.zeros((n_lang, n_layers, width), dtype=torch.bool)
+    counts_by_lang = torch.bincount(lang, minlength=n_lang)
+    for lang_idx, split_idx in enumerate(indice.split(counts_by_lang.tolist())):
+        if split_idx.numel() == 0:
+            continue
+        lang_index = [tuple(row.tolist()) for row in merged_index[split_idx]]
+        lang_index.sort()
+        for layer_idx, hidden_idx in lang_index:
+            selected_mask[lang_idx, layer_idx, hidden_idx] = True
 
     return {
         "selected_mask": selected_mask,
-        "top_indices": top_indices,
-        "top_scores": torch.where(top_valid, top_scores, torch.zeros_like(top_scores)),
-        "top_valid": top_valid,
+        "top_indices": merged_index,
+        "top_scores": selected_probs,
+        "top_valid": selected_probs_by_lang > activation_bar,
         "counts_per_lang_layer": selected_mask.sum(dim=2),
     }
 
