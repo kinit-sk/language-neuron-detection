@@ -9,6 +9,6 @@ outputs/*
 .DS_Store
 .vscode/
 
-eval/outputs/
-eval/results/
+eval/perplexity/outputs/
+eval/perplexity/results/
 *.log
