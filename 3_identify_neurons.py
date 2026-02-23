@@ -3,7 +3,7 @@ from typing import Any
 
 import hydra
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 
 
 def _safe_abs(x: torch.Tensor) -> torch.Tensor:
@@ -30,7 +30,31 @@ def _resolve_activation_path(load_dir: str, lang: str, recording_strategy: str) 
     return strategy_path
 
 
-def _collect_activation_tensors(load_dir: str, languages: list[str], recording_strategy: str) -> dict[str, torch.Tensor]:
+def _resolve_record_components(cfg: DictConfig) -> tuple[bool, bool]:
+    components = cfg.identify_neurons.record_activations.get("components", ["mlp", "attn"])
+    if isinstance(components, str):
+        components = [components]
+    elif isinstance(components, ListConfig):
+        components = list(components)
+
+    if not isinstance(components, (list, tuple)) or not components:
+        raise ValueError("record_activations.components must be a non-empty list containing 'mlp' and/or 'attn'")
+    normalized = {str(c).strip().lower() for c in components}
+    invalid = normalized - {"mlp", "attn"}
+    if invalid:
+        raise ValueError(f"Unsupported record_activations.components values: {sorted(invalid)}")
+    include_mlp = "mlp" in normalized
+    include_attn = "attn" in normalized
+    return include_mlp, include_attn
+
+
+def _collect_activation_tensors(
+    load_dir: str,
+    languages: list[str],
+    recording_strategy: str,
+    include_mlp: bool,
+    include_attn: bool,
+) -> dict[str, torch.Tensor]:
     by_lang: dict[str, dict[str, torch.Tensor]] = {}
     common_keys: set[str] | None = None
 
@@ -38,15 +62,17 @@ def _collect_activation_tensors(load_dir: str, languages: list[str], recording_s
         data = _load_language_activation(_resolve_activation_path(load_dir, lang, recording_strategy))
         lang_tensors: dict[str, torch.Tensor] = {}
 
-        mlp = data.get("mlp_grad_average_activations")
-        if torch.is_tensor(mlp):
-            lang_tensors["mlp_grad_average_activations"] = _safe_abs(mlp)
+        if include_mlp:
+            mlp = data.get("mlp_grad_average_activations")
+            if torch.is_tensor(mlp):
+                lang_tensors["mlp_grad_average_activations"] = _safe_abs(mlp)
 
-        attn = data.get("attn_grad_average_activations")
-        if isinstance(attn, dict):
-            for proj_name, proj_tensor in attn.items():
-                if torch.is_tensor(proj_tensor):
-                    lang_tensors[f"attn_{proj_name}_average_activations"] = _safe_abs(proj_tensor)
+        if include_attn:
+            attn = data.get("attn_grad_average_activations")
+            if isinstance(attn, dict):
+                for proj_name, proj_tensor in attn.items():
+                    if torch.is_tensor(proj_tensor):
+                        lang_tensors[f"attn_{proj_name}_average_activations"] = _safe_abs(proj_tensor)
 
         if not lang_tensors:
             raise ValueError(f"No valid activation tensors found for language: {lang}")
@@ -151,8 +177,15 @@ def main(cfg: DictConfig):
     top_rate = float(cfg.identify_neurons.select_neurons.top_rate)
     filter_rate = _resolve_filter_rate(cfg, recording_strategy)
     activation_bar_ratio = float(cfg.identify_neurons.select_neurons.activation_bar_ratio)
+    include_mlp, include_attn = _resolve_record_components(cfg)
 
-    stacked_by_key = _collect_activation_tensors(load_dir, languages, recording_strategy)
+    stacked_by_key = _collect_activation_tensors(
+        load_dir,
+        languages,
+        recording_strategy,
+        include_mlp=include_mlp,
+        include_attn=include_attn,
+    )
 
     results: dict[str, dict[str, Any]] = {}
     aggregate_counts_per_lang = torch.zeros(len(languages), dtype=torch.long)
@@ -187,6 +220,7 @@ def main(cfg: DictConfig):
         "languages": languages,
         "params": {
             "recording_strategy": recording_strategy,
+            "components": [c for c, enabled in (("mlp", include_mlp), ("attn", include_attn)) if enabled],
             "top_rate": top_rate,
             "filter_rate": filter_rate,
             "activation_bar_ratio": activation_bar_ratio,

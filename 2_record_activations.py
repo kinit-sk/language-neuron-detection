@@ -5,7 +5,7 @@ from functools import partial
 import hydra
 import torch
 import torch.nn.functional as F
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM
 
@@ -24,6 +24,23 @@ def _init_stats(num_layers: int, width: int) -> dict[str, torch.Tensor]:
         "sums": torch.zeros(num_layers, width, dtype=torch.float32),
         "counts": torch.zeros(num_layers, dtype=torch.int64),
     }
+
+
+def _resolve_record_components(cfg: DictConfig) -> tuple[bool, bool]:
+    components = cfg.identify_neurons.record_activations.get("components", ["mlp", "attn"])
+    if isinstance(components, str):
+        components = [components]
+    if isinstance(components, ListConfig):
+        components = list(components)
+    if not isinstance(components, (list, tuple)) or not components:
+        raise ValueError("record_activations.components must be a non-empty list containing 'mlp' and/or 'attn'")
+    normalized = {str(c).strip().lower() for c in components}
+    invalid = normalized - {"mlp", "attn"}
+    if invalid:
+        raise ValueError(f"Unsupported record_activations.components values: {sorted(invalid)}")
+    include_mlp = "mlp" in normalized
+    include_attn = "attn" in normalized
+    return include_mlp, include_attn
 
 
 def _accumulate_act_grad(stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor, grad: torch.Tensor):
@@ -117,19 +134,27 @@ def init_stats(intermediate_size: int, num_layers: int, q_size: int, k_size: int
 def attach_hooks(
     cfg: DictConfig,
     model: torch.nn.Module,
-    mlp_grad_stats: dict[str, torch.Tensor],
-    attn_grad_stats: dict[str, dict[str, torch.Tensor]],
+    mlp_grad_stats: dict[str, torch.Tensor] | None,
+    attn_grad_stats: dict[str, dict[str, torch.Tensor]] | None,
+    include_mlp: bool,
+    include_attn: bool,
 ):
     handles = []
     original_mlp_forwards = []
     for i, layer in enumerate(model.model.layers):
-        original_mlp_forward = register_mlp_patched_forward(cfg, layer.mlp, i, mlp_grad_stats)
-        original_mlp_forwards.append((layer.mlp, original_mlp_forward))
+        if include_mlp:
+            if mlp_grad_stats is None:
+                raise ValueError("MLP stats are required when include_mlp=True")
+            original_mlp_forward = register_mlp_patched_forward(cfg, layer.mlp, i, mlp_grad_stats)
+            original_mlp_forwards.append((layer.mlp, original_mlp_forward))
 
-        if not hasattr(layer, "self_attn") or not hasattr(layer.self_attn, "q_proj") or not hasattr(layer.self_attn, "k_proj") or not hasattr(layer.self_attn, "v_proj"):
-            print(f"Skipping layer {i} because it does not have q, k, v projections")
-            continue
-        handles.extend(register_attn_hooks(cfg, layer, i, attn_grad_stats))
+        if include_attn:
+            if attn_grad_stats is None:
+                raise ValueError("Attention stats are required when include_attn=True")
+            if not hasattr(layer, "self_attn") or not hasattr(layer.self_attn, "q_proj") or not hasattr(layer.self_attn, "k_proj") or not hasattr(layer.self_attn, "v_proj"):
+                print(f"Skipping layer {i} because it does not have q, k, v projections")
+                continue
+            handles.extend(register_attn_hooks(cfg, layer, i, attn_grad_stats))
 
     return handles, original_mlp_forwards
 
@@ -144,26 +169,33 @@ def _compute_average(stats: dict[str, torch.Tensor]) -> torch.Tensor:
 
 
 def save_activations(
-    mlp_grad_stats: dict[str, torch.Tensor],
-    attn_grad_stats: dict[str, dict[str, torch.Tensor]],
+    mlp_grad_stats: dict[str, torch.Tensor] | None,
+    attn_grad_stats: dict[str, dict[str, torch.Tensor]] | None,
     lang: str,
     save_dir: str,
     size: int,
     recording_strategy: str,
+    include_mlp: bool,
+    include_attn: bool,
 ):
-    mlp_grad_average = _compute_average(mlp_grad_stats)
-    attn_grad_average = {
-        "q_proj_average": _compute_average(attn_grad_stats["q_proj"]),
-        "k_proj_average": _compute_average(attn_grad_stats["k_proj"]),
-        "v_proj_average": _compute_average(attn_grad_stats["v_proj"]),
+    output = {
+        "n": size,
+        "recording_strategy": recording_strategy,
+        "components": [c for c, enabled in (("mlp", include_mlp), ("attn", include_attn)) if enabled],
     }
-
-    output = dict(
-        n=size,
-        recording_strategy=recording_strategy,
-        mlp_grad_average_activations=mlp_grad_average.to("cpu"),
-        attn_grad_average_activations={k: v.to("cpu") for k, v in attn_grad_average.items()},
-    )
+    if include_mlp:
+        if mlp_grad_stats is None:
+            raise ValueError("MLP stats are required when include_mlp=True")
+        output["mlp_grad_average_activations"] = _compute_average(mlp_grad_stats).to("cpu")
+    if include_attn:
+        if attn_grad_stats is None:
+            raise ValueError("Attention stats are required when include_attn=True")
+        attn_grad_average = {
+            "q_proj_average": _compute_average(attn_grad_stats["q_proj"]),
+            "k_proj_average": _compute_average(attn_grad_stats["k_proj"]),
+            "v_proj_average": _compute_average(attn_grad_stats["v_proj"]),
+        }
+        output["attn_grad_average_activations"] = {k: v.to("cpu") for k, v in attn_grad_average.items()}
 
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"{lang}_{recording_strategy}.pt")
@@ -190,15 +222,29 @@ def main(cfg: DictConfig):
             f"Unsupported recording_strategy='{recording_strategy}'. "
             "Supported strategies are: 'grad_act', 'act'."
         )
+    include_mlp, include_attn = _resolve_record_components(cfg)
+    if not include_mlp and not include_attn:
+        raise ValueError("record_activations.components must include at least one of: 'mlp', 'attn'")
     num_layers = len(model.model.layers)
-    intermediate_size = model.model.layers[0].mlp.gate_proj.out_features
-    q_size = model.model.layers[0].self_attn.q_proj.out_features
-    k_size = model.model.layers[0].self_attn.k_proj.out_features
-    v_size = model.model.layers[0].self_attn.v_proj.out_features
+    intermediate_size = model.model.layers[0].mlp.gate_proj.out_features if include_mlp else None
+    q_size = model.model.layers[0].self_attn.q_proj.out_features if include_attn else None
+    k_size = model.model.layers[0].self_attn.k_proj.out_features if include_attn else None
+    v_size = model.model.layers[0].self_attn.v_proj.out_features if include_attn else None
 
     for lang in cfg.main.languages:
-        mlp_grad_stats, attn_grad_stats = init_stats(intermediate_size, num_layers, q_size, k_size, v_size)
-        handles, original_mlp_forwards = attach_hooks(cfg, model, mlp_grad_stats, attn_grad_stats)
+        mlp_grad_stats = _init_stats(num_layers, intermediate_size) if include_mlp and intermediate_size is not None else None
+        attn_grad_stats = (
+            {
+                "q_proj": _init_stats(num_layers, q_size),
+                "k_proj": _init_stats(num_layers, k_size),
+                "v_proj": _init_stats(num_layers, v_size),
+            }
+            if include_attn and q_size is not None and k_size is not None and v_size is not None
+            else None
+        )
+        handles, original_mlp_forwards = attach_hooks(
+            cfg, model, mlp_grad_stats, attn_grad_stats, include_mlp, include_attn
+        )
 
         ids = torch.load(os.path.join(cfg.identify_neurons.tokenize.save_dir, cfg.main.ex_id, f"{lang}.pt"))
         print(f"{lang} tokens loaded succesfully")
@@ -229,7 +275,16 @@ def main(cfg: DictConfig):
                     model(batch, use_cache=False)
 
         save_path = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
-        save_activations(mlp_grad_stats, attn_grad_stats, lang, save_path, ids.size(0), recording_strategy)
+        save_activations(
+            mlp_grad_stats,
+            attn_grad_stats,
+            lang,
+            save_path,
+            ids.size(0),
+            recording_strategy,
+            include_mlp,
+            include_attn,
+        )
 
         for h in handles:
             h.remove()
