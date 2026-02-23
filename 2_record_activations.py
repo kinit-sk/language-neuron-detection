@@ -22,6 +22,7 @@ def _safe_float_tensor(x: torch.Tensor) -> torch.Tensor:
 def _init_stats(num_layers: int, width: int) -> dict[str, torch.Tensor]:
     return {
         "sums": torch.zeros(num_layers, width, dtype=torch.float32),
+        "over_threshold": torch.zeros(num_layers, width, dtype=torch.float32),
         "counts": torch.zeros(num_layers, dtype=torch.int64),
     }
 
@@ -43,18 +44,23 @@ def _resolve_record_components(cfg: DictConfig) -> tuple[bool, bool]:
     return include_mlp, include_attn
 
 
-def _accumulate_act_grad(stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor, grad: torch.Tensor):
-    act_grad = _safe_float_tensor(act.detach()) * _safe_float_tensor(grad)
+def _accumulate_act_grad(
+    stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor, grad: torch.Tensor, threshold: float
+):
+    act_clean = _safe_float_tensor(act.detach())
+    metric = (act_clean * _safe_float_tensor(grad)).abs()
     with torch.no_grad():
-        stats["sums"][layer_idx] += act_grad.abs().sum(dim=(0, 1)).cpu()
-        stats["counts"][layer_idx] += act_grad.size(0) * act_grad.size(1)
+        stats["sums"][layer_idx] += metric.sum(dim=(0, 1)).cpu()
+        stats["over_threshold"][layer_idx] += (metric > threshold).sum(dim=(0, 1)).cpu()
+        stats["counts"][layer_idx] += metric.size(0) * metric.size(1)
 
 
-def _accumulate_act(stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor):
-    act = _safe_float_tensor(act.detach())
+def _accumulate_act(stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor, threshold: float):
+    metric = _safe_float_tensor(act.detach()).abs()
     with torch.no_grad():
-        stats["sums"][layer_idx] += act.abs().sum(dim=(0, 1)).cpu()
-        stats["counts"][layer_idx] += act.size(0) * act.size(1)
+        stats["sums"][layer_idx] += metric.sum(dim=(0, 1)).cpu()
+        stats["over_threshold"][layer_idx] += (metric > threshold).sum(dim=(0, 1)).cpu()
+        stats["counts"][layer_idx] += metric.size(0) * metric.size(1)
 
 
 def register_mlp_patched_forward(
@@ -65,6 +71,7 @@ def register_mlp_patched_forward(
 ):
     variant = cfg.identify_neurons.record_activations.variant
     recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
+    activation_threshold = float(cfg.identify_neurons.record_activations.get("activation_threshold", 0.0))
     original_forward = mlp.forward
 
     def patched_forward(self, x):
@@ -76,11 +83,11 @@ def register_mlp_patched_forward(
 
         if recording_strategy == "grad_act":
             def grad_hook_fn(grad):
-                _accumulate_act_grad(mlp_grad_stats, layer_idx, tracked, grad)
+                _accumulate_act_grad(mlp_grad_stats, layer_idx, tracked, grad, activation_threshold)
 
             tracked.register_hook(grad_hook_fn)
         elif recording_strategy == "act":
-            _accumulate_act(mlp_grad_stats, layer_idx, tracked)
+            _accumulate_act(mlp_grad_stats, layer_idx, tracked, activation_threshold)
         else:
             raise ValueError(
                 f"Unsupported recording_strategy='{recording_strategy}'. "
@@ -99,15 +106,16 @@ def register_attn_hooks(
     attn_grad_stats: dict[str, dict[str, torch.Tensor]],
 ):
     recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
+    activation_threshold = float(cfg.identify_neurons.record_activations.get("activation_threshold", 0.0))
 
     def attn_hook_fn(module_name: str, _layer_idx: int, _module: torch.nn.Module, _inputs, output: torch.Tensor):
         if recording_strategy == "grad_act":
             def grad_hook_fn(grad):
-                _accumulate_act_grad(attn_grad_stats[module_name], _layer_idx, output, grad)
+                _accumulate_act_grad(attn_grad_stats[module_name], _layer_idx, output, grad, activation_threshold)
 
             output.register_hook(grad_hook_fn)
         elif recording_strategy == "act":
-            _accumulate_act(attn_grad_stats[module_name], _layer_idx, output)
+            _accumulate_act(attn_grad_stats[module_name], _layer_idx, output, activation_threshold)
         else:
             raise ValueError(
                 f"Unsupported recording_strategy='{recording_strategy}'. "
@@ -169,6 +177,15 @@ def _compute_average(stats: dict[str, torch.Tensor]) -> torch.Tensor:
     )
 
 
+def _compute_over_threshold_rate(stats: dict[str, torch.Tensor]) -> torch.Tensor:
+    counts = stats["counts"].unsqueeze(1).float()
+    return torch.where(
+        counts > 0,
+        stats["over_threshold"] / counts,
+        torch.zeros_like(stats["over_threshold"]),
+    )
+
+
 def save_activations(
     mlp_grad_stats: dict[str, torch.Tensor] | None,
     attn_grad_stats: dict[str, dict[str, torch.Tensor]] | None,
@@ -176,6 +193,7 @@ def save_activations(
     save_dir: str,
     size: int,
     recording_strategy: str,
+    activation_threshold: float,
     include_mlp: bool,
     include_attn: bool,
 ):
@@ -183,11 +201,13 @@ def save_activations(
         "n": size,
         "recording_strategy": recording_strategy,
         "components": [c for c, enabled in (("mlp", include_mlp), ("attn", include_attn)) if enabled],
+        "activation_threshold": activation_threshold,
     }
     if include_mlp:
         if mlp_grad_stats is None:
             raise ValueError("MLP stats are required when include_mlp=True")
         output["mlp_grad_average_activations"] = _compute_average(mlp_grad_stats).to("cpu")
+        output["mlp_over_threshold_rate"] = _compute_over_threshold_rate(mlp_grad_stats).to("cpu")
     if include_attn:
         if attn_grad_stats is None:
             raise ValueError("Attention stats are required when include_attn=True")
@@ -196,7 +216,13 @@ def save_activations(
             "k_proj_average": _compute_average(attn_grad_stats["k_proj"]),
             "v_proj_average": _compute_average(attn_grad_stats["v_proj"]),
         }
+        attn_over_threshold_rate = {
+            "q_proj_rate": _compute_over_threshold_rate(attn_grad_stats["q_proj"]),
+            "k_proj_rate": _compute_over_threshold_rate(attn_grad_stats["k_proj"]),
+            "v_proj_rate": _compute_over_threshold_rate(attn_grad_stats["v_proj"]),
+        }
         output["attn_grad_average_activations"] = {k: v.to("cpu") for k, v in attn_grad_average.items()}
+        output["attn_over_threshold_rate"] = {k: v.to("cpu") for k, v in attn_over_threshold_rate.items()}
 
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"{lang}_{recording_strategy}.pt")
@@ -218,6 +244,7 @@ def main(cfg: DictConfig):
     chunk_size = cfg.identify_neurons.record_activations.chunk_size
     batch_size = cfg.identify_neurons.record_activations.batch_size
     recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
+    activation_threshold = float(cfg.identify_neurons.record_activations.get("activation_threshold", 0.0))
     if recording_strategy not in {"grad_act", "act"}:
         raise ValueError(
             f"Unsupported recording_strategy='{recording_strategy}'. "
@@ -283,6 +310,7 @@ def main(cfg: DictConfig):
             save_path,
             ids.size(0),
             recording_strategy,
+            activation_threshold,
             include_mlp,
             include_attn,
         )

@@ -52,6 +52,7 @@ def _collect_activation_tensors(
     load_dir: str,
     languages: list[str],
     recording_strategy: str,
+    lape_metric: str,
     include_mlp: bool,
     include_attn: bool,
 ) -> dict[str, torch.Tensor]:
@@ -63,16 +64,19 @@ def _collect_activation_tensors(
         lang_tensors: dict[str, torch.Tensor] = {}
 
         if include_mlp:
-            mlp = data.get("mlp_grad_average_activations")
+            mlp_key = "mlp_grad_average_activations" if lape_metric == "grad_average_activations" else "mlp_over_threshold_rate"
+            mlp = data.get(mlp_key)
             if torch.is_tensor(mlp):
-                lang_tensors["mlp_grad_average_activations"] = _safe_abs(mlp)
+                lang_tensors[f"mlp_{lape_metric}"] = _safe_abs(mlp)
 
         if include_attn:
-            attn = data.get("attn_grad_average_activations")
+            attn_key = "attn_grad_average_activations" if lape_metric == "grad_average_activations" else "attn_over_threshold_rate"
+            attn = data.get(attn_key)
             if isinstance(attn, dict):
                 for proj_name, proj_tensor in attn.items():
                     if torch.is_tensor(proj_tensor):
-                        lang_tensors[f"attn_{proj_name}_average_activations"] = _safe_abs(proj_tensor)
+                        proj = "q_proj" if proj_name.startswith("q_proj") else ("k_proj" if proj_name.startswith("k_proj") else ("v_proj" if proj_name.startswith("v_proj") else proj_name))
+                        lang_tensors[f"attn_{proj}_{lape_metric}"] = _safe_abs(proj_tensor)
 
         if not lang_tensors:
             raise ValueError(f"No valid activation tensors found for language: {lang}")
@@ -164,6 +168,17 @@ def _resolve_filter_rate(cfg: DictConfig, recording_strategy: str) -> float:
     return float(select_cfg.filter_rate)
 
 
+def _resolve_lape_metric(cfg: DictConfig) -> str:
+    raw = str(cfg.identify_neurons.select_neurons.get("recorded_metric", "grad_average_activations")).strip().lower()
+    valid = {"grad_average_activations", "over_threshold_rate"}
+    if raw not in valid:
+        raise ValueError(
+            "identify_neurons.select_neurons.recorded_metric must be one of: "
+            "'grad_average_activations', 'over_threshold_rate'"
+        )
+    return raw
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
@@ -177,12 +192,14 @@ def main(cfg: DictConfig):
     top_rate = float(cfg.identify_neurons.select_neurons.top_rate)
     filter_rate = _resolve_filter_rate(cfg, recording_strategy)
     activation_bar_ratio = float(cfg.identify_neurons.select_neurons.activation_bar_ratio)
+    lape_metric = _resolve_lape_metric(cfg)
     include_mlp, include_attn = _resolve_record_components(cfg)
 
     stacked_by_key = _collect_activation_tensors(
         load_dir,
         languages,
         recording_strategy,
+        lape_metric,
         include_mlp=include_mlp,
         include_attn=include_attn,
     )
@@ -224,6 +241,7 @@ def main(cfg: DictConfig):
             "top_rate": top_rate,
             "filter_rate": filter_rate,
             "activation_bar_ratio": activation_bar_ratio,
+            "recorded_metric": lape_metric,
         },
         "results": results,
     }
