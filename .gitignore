@@ -3,9 +3,12 @@ finetuning_impl/__pycache__
 data/*
 mlruns/*
 prompts/*
-  
+outputs/*
+ 
 .python-version
 .DS_Store
+.vscode/
 
-eval/perplexity/outputs/
-eval/perplexity/results/
+eval/outputs/
+eval/results/
+*.log

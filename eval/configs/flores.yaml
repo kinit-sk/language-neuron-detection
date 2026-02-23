@@ -6,9 +6,10 @@ evaluation:
   dataset_hf_path: "tomasmajercik/flores-parquet"
   max_length: 512
   stride: 256
-  save_path: "results/perplexity"
+  save_path: "results"
   streaming: true
 
+use_fix_serialized_bytes: false
 datasets:
   eng_Latn:
     path: ${evaluation.dataset_hf_path}

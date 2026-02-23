@@ -9,9 +9,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
 import torch.nn.functional as F
-from datasets import load_dataset
 from omegaconf import DictConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 from misc import get_device
 
@@ -24,12 +23,7 @@ ATTN_V_KEY = "attn_v_proj_average_activations"
 
 @dataclass
 class EvalDataConfig:
-    path: str
-    split: str
-    streaming: bool
-    text_field: str
-    english_path: str | None
-    english_name: str
+    tokenized_dir: str
 
 
 def _resolve_selected_neurons_path(cfg: DictConfig) -> str:
@@ -53,46 +47,46 @@ def _load_selected_neurons(path: str) -> dict[str, Any]:
 
 
 def _build_eval_data_cfg(cfg: DictConfig) -> EvalDataConfig:
-    dataset_cfg = cfg.identify_neurons.evaluate_identified_neurons.dataset
+    eval_cfg = cfg.identify_neurons.evaluate_identified_neurons
+    tokenized_dir = eval_cfg.get("tokenized_dir")
+    if tokenized_dir:
+        resolved = str(tokenized_dir)
+    else:
+        resolved = os.path.join(cfg.identify_neurons.tokenize.save_dir, cfg.main.ex_id)
     return EvalDataConfig(
-        path=str(dataset_cfg.path),
-        split=str(dataset_cfg.split),
-        streaming=bool(dataset_cfg.streaming),
-        text_field=str(dataset_cfg.text_field),
-        english_path=str(dataset_cfg.english_path) if dataset_cfg.english_path else None,
-        english_name=str(dataset_cfg.english_name),
+        tokenized_dir=resolved,
     )
 
 
 def _load_language_tokens(
-    tokenizer: AutoTokenizer,
     lang: str,
     data_cfg: EvalDataConfig,
     target_num_tokens: int,
 ) -> torch.Tensor:
-    if lang == "eng_Latn" and data_cfg.english_path:
-        dataset_path = data_cfg.english_path
-        dataset_name = data_cfg.english_name
+    token_path = os.path.join(data_cfg.tokenized_dir, f"{lang}.pt")
+    if not os.path.exists(token_path):
+        raise FileNotFoundError(
+            f"Tokenized file not found for {lang}: {token_path}. "
+            "Run 1_tokenize.py first or set evaluate_identified_neurons.tokenized_dir."
+        )
+
+    token_ids = torch.load(token_path, map_location="cpu")
+    if isinstance(token_ids, list):
+        token_ids = torch.tensor(token_ids, dtype=torch.long)
+    elif isinstance(token_ids, torch.Tensor):
+        token_ids = token_ids.to(dtype=torch.long, device="cpu")
     else:
-        dataset_path = data_cfg.path
-        dataset_name = lang
+        raise ValueError(f"Unsupported token file format at {token_path}: {type(token_ids)!r}")
 
-    dataset = load_dataset(dataset_path, dataset_name, split=data_cfg.split, streaming=data_cfg.streaming)
+    if token_ids.ndim != 1:
+        token_ids = token_ids.reshape(-1)
 
-    token_ids: list[int] = []
-    for item in dataset:
-        text = item.get(data_cfg.text_field)
-        if not text:
-            continue
-        token_ids.extend(tokenizer.encode(text, add_special_tokens=False))
-        if len(token_ids) >= target_num_tokens:
-            token_ids = token_ids[:target_num_tokens]
-            break
+    if target_num_tokens > 0:
+        token_ids = token_ids[:target_num_tokens]
 
-    if len(token_ids) < 2:
-        raise ValueError(f"Not enough tokens for language {lang} from dataset {dataset_path}")
-
-    return torch.tensor(token_ids, dtype=torch.long)
+    if token_ids.numel() < 2:
+        raise ValueError(f"Not enough tokens for language {lang} in {token_path}")
+    return token_ids
 
 
 def _find_model_layers(model: torch.nn.Module) -> list[torch.nn.Module]:
@@ -264,14 +258,15 @@ def _save_heatmap_from_csv(csv_path: str, png_path: str):
         values,
         xticklabels=col_langs,
         yticklabels=row_langs,
-        cmap="viridis",
+        cmap="coolwarm",
         annot=True,
-        fmt=".0f",
-        cbar_kws={"label": "Perplexity"},
+        fmt=".4f",
+        center=0.0,
+        cbar_kws={"label": "log(ppx_after / ppx_before)"},
     )
     ax.set_xlabel("Evaluation language")
     ax.set_ylabel("Ablated language")
-    ax.set_title("Perplexity Matrix After Language-Specific Neuron Ablation")
+    ax.set_title("Log-Perplexity-Ratio Matrix After Language-Specific Neuron Ablation")
     plt.tight_layout()
     plt.savefig(png_path, dpi=200, bbox_inches="tight")
     plt.close()
@@ -291,18 +286,30 @@ def main(cfg: DictConfig):
     model_dtype = torch.float16 if device.type in {"cuda", "mps"} else torch.float32
     model = AutoModelForCausalLM.from_pretrained(cfg.main.model_path, dtype=model_dtype).to(device, non_blocking=True)
     model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(cfg.main.model_path, use_fast=True)
 
     data_cfg = _build_eval_data_cfg(cfg)
     target_num_tokens = int(eval_cfg.target_num_tokens)
     seq_len = int(eval_cfg.seq_len)
     batch_size = int(eval_cfg.batch_size)
 
-    print("Preparing tokenized evaluation data...")
+    print(f"Preparing tokenized evaluation data from: {data_cfg.tokenized_dir}")
     eval_tokens: dict[str, torch.Tensor] = {}
     for lang in col_languages:
-        eval_tokens[lang] = _load_language_tokens(tokenizer, lang, data_cfg, target_num_tokens)
+        eval_tokens[lang] = _load_language_tokens(lang, data_cfg, target_num_tokens)
         print(f"Loaded {lang}: {eval_tokens[lang].numel()} tokens")
+
+    print("Computing baseline perplexity (before ablation)...")
+    baseline_ppx: dict[str, float] = {}
+    for eval_lang in col_languages:
+        ppx_before = _compute_perplexity(
+            model=model,
+            token_ids=eval_tokens[eval_lang],
+            seq_len=seq_len,
+            batch_size=batch_size,
+            device=device,
+        )
+        baseline_ppx[eval_lang] = ppx_before
+        print(f"  baseline {eval_lang}: ppx_before={ppx_before:.6f}")
 
     layers = _find_model_layers(model)
     matrix: dict[str, dict[str, float]] = {}
@@ -314,15 +321,21 @@ def main(cfg: DictConfig):
 
         row_result: dict[str, float] = {}
         for eval_lang in col_languages:
-            ppl = _compute_perplexity(
+            ppx_after = _compute_perplexity(
                 model=model,
                 token_ids=eval_tokens[eval_lang],
                 seq_len=seq_len,
                 batch_size=batch_size,
                 device=device,
             )
-            row_result[eval_lang] = ppl
-            print(f"  {ablation_lang} -> {eval_lang}: ppl={ppl:.6f}")
+            ppx_before = baseline_ppx[eval_lang]
+            log_ppx_ratio = float(math.log(ppx_after / ppx_before))
+            row_result[eval_lang] = log_ppx_ratio
+            print(
+                f"  {ablation_lang} -> {eval_lang}: "
+                f"ppx_before={ppx_before:.6f}, ppx_after={ppx_after:.6f}, "
+                f"log_ratio={log_ppx_ratio:.6f}"
+            )
         matrix[ablation_lang] = row_result
 
         for h in handles:
@@ -331,9 +344,9 @@ def main(cfg: DictConfig):
     save_dir = os.path.join(eval_cfg.save_dir, cfg.main.ex_id)
     os.makedirs(save_dir, exist_ok=True)
 
-    csv_path = os.path.join(save_dir, "perplexity_matrix.csv")
+    csv_path = os.path.join(save_dir, "log_ppx_ratio_matrix.csv")
     _save_matrix_csv(csv_path, row_languages, col_languages, matrix)
-    png_path = os.path.join(save_dir, "perplexity_matrix.png")
+    png_path = os.path.join(save_dir, "log_ppx_ratio_matrix.png")
     _save_heatmap_from_csv(csv_path, png_path)
 
     result_payload = {
@@ -341,22 +354,16 @@ def main(cfg: DictConfig):
         "model_path": cfg.main.model_path,
         "row_languages": row_languages,
         "col_languages": col_languages,
-        "dataset": {
-            "path": data_cfg.path,
-            "split": data_cfg.split,
-            "streaming": data_cfg.streaming,
-            "text_field": data_cfg.text_field,
-            "english_path": data_cfg.english_path,
-            "english_name": data_cfg.english_name,
-        },
+        "tokenized_dir": data_cfg.tokenized_dir,
         "seq_len": seq_len,
         "batch_size": batch_size,
         "target_num_tokens": target_num_tokens,
-        "metric": "perplexity",
+        "metric": "log(ppx_after / ppx_before)",
+        "baseline_ppx_before": baseline_ppx,
         "matrix": matrix,
     }
 
-    pt_path = os.path.join(save_dir, "perplexity_matrix.pt")
+    pt_path = os.path.join(save_dir, "log_ppx_ratio_matrix.pt")
     torch.save(result_payload, pt_path)
     print(f"Saved matrix CSV to {csv_path}")
     print(f"Saved heatmap PNG to {png_path}")

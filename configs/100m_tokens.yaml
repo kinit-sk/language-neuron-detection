@@ -40,14 +40,8 @@ identify_neurons: # identify neurons
   evaluate_identified_neurons:
     selected_neurons_path: null # null -> uses data/3_output/<ex_id>/lape_selected_neurons.pt
     save_dir: "data/4_output"
+    tokenized_dir: null # null -> uses data/1_output/<ex_id>
     eval_languages: null # null -> uses main.languages
     target_num_tokens: 131072
     seq_len: 1024
     batch_size: 1
-    dataset:
-      path: "HuggingFaceFW/fineweb-2"
-      split: "train"
-      streaming: true
-      text_field: "text"
-      english_path: "HuggingFaceFW/fineweb" # used only for eng_Latn
-      english_name: "default"

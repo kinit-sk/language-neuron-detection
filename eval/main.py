@@ -1,3 +1,4 @@
+import math
 import torch
 import hydra
 from tqdm import tqdm
@@ -5,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from omegaconf import DictConfig
 from datasets import load_dataset
+from utils.utils import fix_serialized_bytes
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 ORANGE = "\033[33m"
@@ -57,9 +59,6 @@ def calculate_perplexity(model, tokenizer, dataset, text_field, max_length, stri
     avg_loss = total_loss / total_tokens
     print(f"{GREEN}[INFO]{RESET} Perplexity calculation completed")
     return float(torch.exp(torch.tensor(avg_loss)))
-
-import math
-
 def calculate_metrics(
     model,
     tokenizer,
@@ -68,6 +67,7 @@ def calculate_metrics(
     max_length,
     stride,
     max_samples=None,
+    use_fix_serialized_bytes=False,
 ):
     model.eval()
     device = next(model.parameters()).device
@@ -80,6 +80,10 @@ def calculate_metrics(
 
     for item in tqdm(dataset, desc="Streaming texts"):
         text = item[text_field].strip()
+
+        if use_fix_serialized_bytes:
+            text = fix_serialized_bytes(text)
+
         if not text:
             continue
 
@@ -133,7 +137,6 @@ def calculate_metrics(
     }
     return metrics
 
-
 def load_model(model_path, tokenizer_path):
     print(f"{GREEN}[INFO]{RESET} Loading model from {model_path}")
 
@@ -148,7 +151,6 @@ def load_model(model_path, tokenizer_path):
         tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer
-
 def evaluate_model(model, tokenizer, ds_cfg, max_length, stride):
     dataset = load_dataset(
         ds_cfg["path"],
@@ -165,9 +167,9 @@ def evaluate_model(model, tokenizer, ds_cfg, max_length, stride):
         max_length=max_length,
         stride=stride,
         max_samples=ds_cfg["max_samples"],
+        use_fix_serialized_bytes=ds_cfg["use_fix_serialized_bytes"],
     )
     return metrics
-
 
 def save_results(save_path, results):
     output_dir = Path(save_path)
@@ -183,7 +185,8 @@ def save_results(save_path, results):
     
     print(f"{GREEN}[INFO]{RESET} Results saved to {output_file}")
 
-@hydra.main(version_base=None, config_path="configs", config_name="default")
+
+@hydra.main(version_base=None, config_path="configs", config_name="wiki")
 def main(cfg: DictConfig):
     model, tokenizer = load_model(cfg.model.path, cfg.model.tokenizer_path)
 
@@ -208,6 +211,7 @@ def main(cfg: DictConfig):
             'text_field': cfg.datasets[lang].text_field,
             'streaming': cfg.evaluation.streaming,
             'max_samples': cfg.datasets[lang].max_samples,
+            'use_fix_serialized_bytes': cfg.use_fix_serialized_bytes,
         }
         
         metrics = evaluate_model(
