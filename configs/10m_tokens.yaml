@@ -19,7 +19,8 @@ identify_neurons: # identify neurons
     batch_size: 1
     chunk_size: 4096
     max_tokens: 4096 # -1 # means no limit
-    activation_threshold: 0.0
+    mlp_activation_threshold: 0.0
+    attn_activation_threshold: 0.0
     components:
       - mlp
       - attn

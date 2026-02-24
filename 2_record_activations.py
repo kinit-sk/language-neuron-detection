@@ -1,6 +1,7 @@
 import os
 import types
 from functools import partial
+from typing import Optional
 
 import hydra
 import torch
@@ -44,6 +45,39 @@ def _resolve_record_components(cfg: DictConfig) -> tuple[bool, bool]:
     return include_mlp, include_attn
 
 
+def _resolve_recording_strategy(cfg: DictConfig) -> str:
+    recording_strategy = str(cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")).strip().lower()
+    if recording_strategy not in {"grad_act", "act"}:
+        raise ValueError(
+            f"Unsupported recording_strategy='{recording_strategy}'. "
+            "Supported strategies are: 'grad_act', 'act'."
+        )
+    return recording_strategy
+
+
+def _resolve_mlp_variant(cfg: DictConfig) -> str:
+    variant_raw = str(cfg.identify_neurons.record_activations.variant).strip().lower()
+    aliases = {
+        "gate": "gated",
+        "gated": "gated",
+        "gated_up": "gate_up",
+        "gate_up": "gate_up",
+    }
+    if variant_raw not in aliases:
+        raise ValueError(
+            "record_activations.variant must be one of: 'gated', 'gate_up' "
+            "(aliases: 'gate', 'gated_up')"
+        )
+    return aliases[variant_raw]
+
+
+def _resolve_activation_thresholds(cfg: DictConfig) -> tuple[float, float]:
+    record_cfg = cfg.identify_neurons.record_activations
+    mlp_threshold = float(record_cfg.get("mlp_activation_threshold", 0.0))
+    attn_threshold = float(record_cfg.get("attn_activation_threshold", 0.0))
+    return mlp_threshold, attn_threshold
+
+
 def _accumulate_act_grad(
     stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor, grad: torch.Tensor, threshold: float
 ):
@@ -59,24 +93,74 @@ def _accumulate_act(stats: dict[str, torch.Tensor], layer_idx: int, act: torch.T
     metric = _safe_float_tensor(act.detach()).abs()
     with torch.no_grad():
         stats["sums"][layer_idx] += metric.sum(dim=(0, 1)).cpu()
-        stats["over_threshold"][layer_idx] += (metric > threshold).sum(dim=(0, 1)).cpu()
+        stats["over_threshold"][layer_idx] += (metric.abs() > threshold).sum(dim=(0, 1)).cpu()
         stats["counts"][layer_idx] += metric.size(0) * metric.size(1)
 
 
+def _record_mlp(
+    stats: dict[str, torch.Tensor],
+    layer_idx: int,
+    tracked: torch.Tensor,
+    recording_strategy: str,
+    threshold: float,
+    mlp_variant: str,
+):
+    if recording_strategy == "grad_act":
+        def grad_hook_fn(grad):
+            _accumulate_act_grad(stats, layer_idx, tracked, grad, threshold)
+
+        tracked.register_hook(grad_hook_fn)
+        return
+
+    if recording_strategy == "act":
+        with torch.no_grad():
+            if mlp_variant == "gated":
+                tracked_clean = _safe_float_tensor(tracked.detach())
+                stats["sums"][layer_idx] += tracked_clean.sum(dim=(0, 1)).cpu()
+                stats["over_threshold"][layer_idx] += (tracked > 0).sum(dim=(0, 1)).cpu()
+                stats["counts"][layer_idx] += tracked.size(0) * tracked.size(1)
+            else:
+                _accumulate_act(stats, layer_idx, tracked, threshold)
+        return
+
+    raise ValueError(
+        f"Unsupported recording_strategy='{recording_strategy}'. "
+        "Supported strategies are: 'grad_act', 'act'."
+    )
+
+
+def _record_attn(
+    stats: dict[str, torch.Tensor],
+    layer_idx: int,
+    output: torch.Tensor,
+    recording_strategy: str,
+    threshold: float,
+):
+    if recording_strategy == "grad_act":
+        def grad_hook_fn(grad):
+            _accumulate_act_grad(stats, layer_idx, output, grad, threshold)
+
+        output.register_hook(grad_hook_fn)
+        return
+
+    if recording_strategy == "act":
+        _accumulate_act(stats, layer_idx, output, threshold)
+        return
+
+    raise ValueError(
+        f"Unsupported recording_strategy='{recording_strategy}'. "
+        "Supported strategies are: 'grad_act', 'act'."
+    )
+
+
 def register_mlp_patched_forward(
-    cfg: DictConfig,
     mlp: torch.nn.Module,
     layer_idx: int,
     mlp_grad_stats: dict[str, torch.Tensor],
+    recording_strategy: str,
+    mlp_variant: str,
+    mlp_activation_threshold: float,
 ):
-    variant_raw = str(cfg.identify_neurons.record_activations.variant).strip().lower()
-    if variant_raw == "gated_up":
-        variant_raw = "gate_up"
-    if variant_raw not in {"gate", "gate_up"}:
-        raise ValueError("record_activations.variant must be one of: 'gate', 'gate_up' (or alias 'gated_up')")
-    variant = variant_raw
-    recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
-    activation_threshold = float(cfg.identify_neurons.record_activations.get("activation_threshold", 0.0))
     original_forward = mlp.forward
 
     def patched_forward(self, x):
@@ -84,30 +168,16 @@ def register_mlp_patched_forward(
         gate_act = F.silu(gate)
         up = self.up_proj(x)
         gated = gate_act * up
-        tracked = gate_act if variant == "gate" else gated
+        tracked = gate_act if mlp_variant == "gated" else gated
 
-        if recording_strategy == "grad_act":
-            def grad_hook_fn(grad):
-                _accumulate_act_grad(mlp_grad_stats, layer_idx, tracked, grad, activation_threshold)
-
-            tracked.register_hook(grad_hook_fn)
-        elif recording_strategy == "act":
-            with torch.no_grad():
-                if variant == "gate":
-                    mlp_grad_stats["sums"][layer_idx] += _safe_float_tensor(tracked.detach()).sum(dim=(0, 1)).cpu()
-                    mlp_grad_stats["over_threshold"][layer_idx] += (tracked > 0).sum(dim=(0, 1)).cpu()
-                else:
-                    tracked_clean = _safe_float_tensor(tracked.detach())
-                    mlp_grad_stats["sums"][layer_idx] += tracked_clean.sum(dim=(0, 1)).cpu()
-                    mlp_grad_stats["over_threshold"][layer_idx] += (
-                        tracked_clean.abs() > activation_threshold
-                    ).sum(dim=(0, 1)).cpu()
-                mlp_grad_stats["counts"][layer_idx] += tracked.size(0) * tracked.size(1)
-        else:
-            raise ValueError(
-                f"Unsupported recording_strategy='{recording_strategy}'. "
-                "Supported strategies are: 'grad_act', 'act'."
-            )
+        _record_mlp(
+            mlp_grad_stats,
+            layer_idx,
+            tracked,
+            recording_strategy,
+            mlp_activation_threshold,
+            mlp_variant,
+        )
         return self.down_proj(gated)
 
     mlp.forward = types.MethodType(patched_forward, mlp)
@@ -115,27 +185,14 @@ def register_mlp_patched_forward(
 
 
 def register_attn_hooks(
-    cfg: DictConfig,
     layer: torch.nn.Module,
     layer_idx: int,
     attn_grad_stats: dict[str, dict[str, torch.Tensor]],
+    recording_strategy: str,
+    attn_activation_threshold: float,
 ):
-    recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
-    activation_threshold = float(cfg.identify_neurons.record_activations.get("activation_threshold", 0.0))
-
     def attn_hook_fn(module_name: str, _layer_idx: int, _module: torch.nn.Module, _inputs, output: torch.Tensor):
-        if recording_strategy == "grad_act":
-            def grad_hook_fn(grad):
-                _accumulate_act_grad(attn_grad_stats[module_name], _layer_idx, output, grad, activation_threshold)
-
-            output.register_hook(grad_hook_fn)
-        elif recording_strategy == "act":
-            _accumulate_act(attn_grad_stats[module_name], _layer_idx, output, activation_threshold)
-        else:
-            raise ValueError(
-                f"Unsupported recording_strategy='{recording_strategy}'. "
-                "Supported strategies are: 'grad_act', 'act'."
-            )
+        _record_attn(attn_grad_stats[module_name], _layer_idx, output, recording_strategy, attn_activation_threshold)
 
     return [
         layer.self_attn.q_proj.register_forward_hook(partial(attn_hook_fn, "q_proj", layer_idx)),
@@ -144,23 +201,16 @@ def register_attn_hooks(
     ]
 
 
-def init_stats(intermediate_size: int, num_layers: int, q_size: int, k_size: int, v_size: int):
-    mlp_grad_stats = _init_stats(num_layers, intermediate_size)
-    attn_grad_stats = {
-        "q_proj": _init_stats(num_layers, q_size),
-        "k_proj": _init_stats(num_layers, k_size),
-        "v_proj": _init_stats(num_layers, v_size),
-    }
-    return mlp_grad_stats, attn_grad_stats
-
-
 def attach_hooks(
-    cfg: DictConfig,
     model: torch.nn.Module,
     mlp_grad_stats: dict[str, torch.Tensor] | None,
     attn_grad_stats: dict[str, dict[str, torch.Tensor]] | None,
     include_mlp: bool,
     include_attn: bool,
+    recording_strategy: str,
+    mlp_variant: Optional[str],
+    mlp_activation_threshold: float,
+    attn_activation_threshold: float,
 ):
     handles = []
     original_mlp_forwards = []
@@ -168,7 +218,16 @@ def attach_hooks(
         if include_mlp:
             if mlp_grad_stats is None:
                 raise ValueError("MLP stats are required when include_mlp=True")
-            original_mlp_forward = register_mlp_patched_forward(cfg, layer.mlp, i, mlp_grad_stats)
+            if mlp_variant is None:
+                raise ValueError("MLP variant must be provided when include_mlp=True")
+            original_mlp_forward = register_mlp_patched_forward(
+                layer.mlp,
+                i,
+                mlp_grad_stats,
+                recording_strategy,
+                mlp_variant,
+                mlp_activation_threshold,
+            )
             original_mlp_forwards.append((layer.mlp, original_mlp_forward))
 
         if include_attn:
@@ -177,7 +236,7 @@ def attach_hooks(
             if not hasattr(layer, "self_attn") or not hasattr(layer.self_attn, "q_proj") or not hasattr(layer.self_attn, "k_proj") or not hasattr(layer.self_attn, "v_proj"):
                 print(f"Skipping layer {i} because it does not have q, k, v projections")
                 continue
-            handles.extend(register_attn_hooks(cfg, layer, i, attn_grad_stats))
+            handles.extend(register_attn_hooks(layer, i, attn_grad_stats, recording_strategy, attn_activation_threshold))
 
     return handles, original_mlp_forwards
 
@@ -208,7 +267,8 @@ def save_activations(
     save_dir: str,
     size: int,
     recording_strategy: str,
-    activation_threshold: float,
+    mlp_activation_threshold: float,
+    attn_activation_threshold: float,
     include_mlp: bool,
     include_attn: bool,
 ):
@@ -216,7 +276,8 @@ def save_activations(
         "n": size,
         "recording_strategy": recording_strategy,
         "components": [c for c, enabled in (("mlp", include_mlp), ("attn", include_attn)) if enabled],
-        "activation_threshold": activation_threshold,
+        "mlp_activation_threshold": mlp_activation_threshold,
+        "attn_activation_threshold": attn_activation_threshold,
     }
     if include_mlp:
         if mlp_grad_stats is None:
@@ -258,16 +319,12 @@ def main(cfg: DictConfig):
 
     chunk_size = cfg.identify_neurons.record_activations.chunk_size
     batch_size = cfg.identify_neurons.record_activations.batch_size
-    recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
-    activation_threshold = float(cfg.identify_neurons.record_activations.get("activation_threshold", 0.0))
-    if recording_strategy not in {"grad_act", "act"}:
-        raise ValueError(
-            f"Unsupported recording_strategy='{recording_strategy}'. "
-            "Supported strategies are: 'grad_act', 'act'."
-        )
+    recording_strategy = _resolve_recording_strategy(cfg)
+    mlp_activation_threshold, attn_activation_threshold = _resolve_activation_thresholds(cfg)
     include_mlp, include_attn = _resolve_record_components(cfg)
     if not include_mlp and not include_attn:
         raise ValueError("record_activations.components must include at least one of: 'mlp', 'attn'")
+    mlp_variant = _resolve_mlp_variant(cfg) if include_mlp else None
     num_layers = len(model.model.layers)
     intermediate_size = model.model.layers[0].mlp.gate_proj.out_features if include_mlp else None
     q_size = model.model.layers[0].self_attn.q_proj.out_features if include_attn else None
@@ -286,7 +343,15 @@ def main(cfg: DictConfig):
             else None
         )
         handles, original_mlp_forwards = attach_hooks(
-            cfg, model, mlp_grad_stats, attn_grad_stats, include_mlp, include_attn
+            model,
+            mlp_grad_stats,
+            attn_grad_stats,
+            include_mlp,
+            include_attn,
+            recording_strategy,
+            mlp_variant,
+            mlp_activation_threshold,
+            attn_activation_threshold,
         )
 
         ids = torch.load(os.path.join(cfg.identify_neurons.tokenize.save_dir, cfg.main.ex_id, f"{lang}.pt"))
@@ -325,7 +390,8 @@ def main(cfg: DictConfig):
             save_path,
             ids.size(0),
             recording_strategy,
-            activation_threshold,
+            mlp_activation_threshold,
+            attn_activation_threshold,
             include_mlp,
             include_attn,
         )
