@@ -93,7 +93,7 @@ def _accumulate_act(stats: dict[str, torch.Tensor], layer_idx: int, act: torch.T
     metric = _safe_float_tensor(act.detach()).abs()
     with torch.no_grad():
         stats["sums"][layer_idx] += metric.sum(dim=(0, 1)).cpu()
-        stats["over_threshold"][layer_idx] += (metric.abs() > threshold).sum(dim=(0, 1)).cpu()
+        stats["over_threshold"][layer_idx] += (metric > threshold).sum(dim=(0, 1)).cpu()
         stats["counts"][layer_idx] += metric.size(0) * metric.size(1)
 
 
