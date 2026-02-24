@@ -7,6 +7,8 @@ from datasets import DownloadConfig, load_dataset
 from omegaconf import DictConfig
 from transformers import AutoTokenizer
 
+from misc import set_ex_id_from_config_name
+
 # Avoid native tokenizer worker threads surviving into interpreter shutdown.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # Avoid optional native HF transfer backends that can keep extra threads/resources.
@@ -59,7 +61,8 @@ def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_to
 
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
-    save_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, cfg.main.ex_id)
+    ex_id = set_ex_id_from_config_name()
+    save_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
     os.makedirs(save_path, exist_ok=True)
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.main.model_path, use_fast=True)

@@ -5,6 +5,8 @@ import hydra
 import torch
 from omegaconf import DictConfig, ListConfig
 
+from misc import set_ex_id_from_config_name
+
 
 def _safe_abs(x: torch.Tensor) -> torch.Tensor:
     x = torch.nan_to_num(x.float(), nan=0.0, posinf=0.0, neginf=0.0)
@@ -205,10 +207,11 @@ def _resolve_lape_metric(cfg: DictConfig) -> str:
 
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
-    load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
+    ex_id = set_ex_id_from_config_name()
+    load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, ex_id)
     if not os.path.isdir(load_dir):
         raise FileNotFoundError(f"Activation directory not found: {load_dir}")
-    save_dir = os.path.join(cfg.identify_neurons.select_neurons.save_dir, cfg.main.ex_id)
+    save_dir = os.path.join(cfg.identify_neurons.select_neurons.save_dir, ex_id)
     os.makedirs(save_dir, exist_ok=True)
 
     languages = list(cfg.main.languages)

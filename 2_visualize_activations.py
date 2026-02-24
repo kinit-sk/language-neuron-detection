@@ -8,6 +8,8 @@ import seaborn as sns
 import torch
 from omegaconf import DictConfig
 
+from misc import set_ex_id_from_config_name
+
 
 class ActivationVisualizer:
     def __init__(self, load_dir: str, out_dir: str, langs: list[str], recording_strategy: str):
@@ -131,8 +133,9 @@ class ActivationVisualizer:
 
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
+    ex_id = set_ex_id_from_config_name()
 
-    load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
+    load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, ex_id)
     default_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
     visualize_cfg = cfg.identify_neurons.record_activations.get("visualize", None)
     recording_strategy = (
@@ -145,7 +148,7 @@ def main(cfg: DictConfig):
         if visualize_cfg is not None
         else cfg.identify_neurons.record_activations.save_dir
     )
-    out_dir = os.path.join(out_base_dir, cfg.main.ex_id)
+    out_dir = os.path.join(out_base_dir, ex_id)
     visualizer = ActivationVisualizer(
         load_dir,
         out_dir,

@@ -3,7 +3,6 @@ defaults:
 
 # shared experiment settings
 main:
-  ex_id: replication
   model_path: "meta-llama/Llama-3.2-1B-instruct"
   languages: ["deu_Latn", "fra_Latn", "spa_Latn", "pol_Latn", "slk_Latn", "jpn_Jpan", "cmn_Hani"]
   
@@ -42,9 +41,9 @@ identify_neurons: # identify neurons
     activation_bar_ratio: 0.95
 
   evaluate_identified_neurons:
-    selected_neurons_path: null # null -> uses data/3_output/<ex_id>/lape_selected_neurons.pt
+    selected_neurons_path: null # null -> uses data/3_output/<config_name>/lape_selected_neurons.pt
     save_dir: "data/4_output"
-    tokenized_dir: null # null -> uses data/1_output/<ex_id>
+    tokenized_dir: null # null -> uses data/1_output/<config_name>
     eval_languages: null # null -> uses main.languages
     target_num_tokens: 131072
     seq_len: 1024

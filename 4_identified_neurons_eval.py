@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from omegaconf import DictConfig
 from transformers import AutoModelForCausalLM
 
-from misc import get_device
+from misc import get_device, set_ex_id_from_config_name
 
 
 MLP_KEYS = (
@@ -56,13 +56,13 @@ class EvalDataConfig:
     tokenized_dir: str
 
 
-def _resolve_selected_neurons_path(cfg: DictConfig) -> str:
+def _resolve_selected_neurons_path(cfg: DictConfig, ex_id: str) -> str:
     override_path = cfg.identify_neurons.evaluate_identified_neurons.selected_neurons_path
     if override_path:
         return str(override_path)
     return os.path.join(
         cfg.identify_neurons.select_neurons.save_dir,
-        cfg.main.ex_id,
+        ex_id,
         "lape_selected_neurons.pt",
     )
 
@@ -76,13 +76,13 @@ def _load_selected_neurons(path: str) -> dict[str, Any]:
     return data
 
 
-def _build_eval_data_cfg(cfg: DictConfig) -> EvalDataConfig:
+def _build_eval_data_cfg(cfg: DictConfig, ex_id: str) -> EvalDataConfig:
     eval_cfg = cfg.identify_neurons.evaluate_identified_neurons
     tokenized_dir = eval_cfg.get("tokenized_dir")
     if tokenized_dir:
         resolved = str(tokenized_dir)
     else:
-        resolved = os.path.join(cfg.identify_neurons.tokenize.save_dir, cfg.main.ex_id)
+        resolved = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
     return EvalDataConfig(
         tokenized_dir=resolved,
     )
@@ -305,8 +305,9 @@ def _save_heatmap_from_csv(csv_path: str, png_path: str):
 
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
+    ex_id = set_ex_id_from_config_name()
     eval_cfg = cfg.identify_neurons.evaluate_identified_neurons
-    selected_path = _resolve_selected_neurons_path(cfg)
+    selected_path = _resolve_selected_neurons_path(cfg, ex_id)
     selected = _load_selected_neurons(selected_path)
 
     row_languages = list(selected.get("languages", [])) or list(cfg.main.languages)
@@ -318,7 +319,7 @@ def main(cfg: DictConfig):
     model = AutoModelForCausalLM.from_pretrained(cfg.main.model_path, dtype=model_dtype).to(device, non_blocking=True)
     model.eval()
 
-    data_cfg = _build_eval_data_cfg(cfg)
+    data_cfg = _build_eval_data_cfg(cfg, ex_id)
     target_num_tokens = int(eval_cfg.target_num_tokens)
     seq_len = int(eval_cfg.seq_len)
     batch_size = int(eval_cfg.batch_size)
@@ -377,7 +378,7 @@ def main(cfg: DictConfig):
         for h in handles:
             h.remove()
 
-    save_dir = os.path.join(eval_cfg.save_dir, cfg.main.ex_id)
+    save_dir = os.path.join(eval_cfg.save_dir, ex_id)
     os.makedirs(save_dir, exist_ok=True)
 
     csv_path = os.path.join(save_dir, "log_ppx_ratio_matrix.csv")

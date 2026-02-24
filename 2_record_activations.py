@@ -10,7 +10,7 @@ from omegaconf import DictConfig, ListConfig
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM
 
-from misc import get_device
+from misc import get_device, set_ex_id_from_config_name
 
 
 def _safe_float_tensor(x: torch.Tensor) -> torch.Tensor:
@@ -308,7 +308,8 @@ def save_activations(
 
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
-    tokenize_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, cfg.main.ex_id)
+    ex_id = set_ex_id_from_config_name()
+    tokenize_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
     if not os.path.exists(tokenize_path):
         raise FileNotFoundError("Tokenized data directory does not exist: ensure tokenization step is completed first")
 
@@ -354,7 +355,7 @@ def main(cfg: DictConfig):
             attn_activation_threshold,
         )
 
-        ids = torch.load(os.path.join(cfg.identify_neurons.tokenize.save_dir, cfg.main.ex_id, f"{lang}.pt"))
+        ids = torch.load(os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id, f"{lang}.pt"))
         print(f"{lang} tokens loaded succesfully")
         if cfg.identify_neurons.record_activations.max_tokens > 0:
             size_to_use = min(len(ids), cfg.identify_neurons.record_activations.max_tokens)
@@ -382,7 +383,7 @@ def main(cfg: DictConfig):
                 with torch.no_grad():
                     model(batch, use_cache=False)
 
-        save_path = os.path.join(cfg.identify_neurons.record_activations.save_dir, cfg.main.ex_id)
+        save_path = os.path.join(cfg.identify_neurons.record_activations.save_dir, ex_id)
         save_activations(
             mlp_grad_stats,
             attn_grad_stats,
