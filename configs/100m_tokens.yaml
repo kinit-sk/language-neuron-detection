@@ -4,7 +4,7 @@ defaults:
 # shared experiment settings
 main:
   model_path: "meta-llama/Llama-3.2-1B-instruct"
-  languages: ["deu_Latn", "fra_Latn", "spa_Latn", "pol_Latn", "slk_Latn", "jpn_Jpan", "cmn_Hani"]
+  languages: ["en_Latn", "deu_Latn", "fra_Latn", "spa_Latn", "pol_Latn", "slk_Latn", "jpn_Jpan", "cmn_Hani"]
   
 ## step 1 specific settings
 identify_neurons: # identify neurons

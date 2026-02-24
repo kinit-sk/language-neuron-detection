@@ -183,6 +183,17 @@ def _log_selection_stats(key: str, selected_mask: torch.Tensor, languages: list[
         pct = (count / total_neurons_per_lang) * 100.0 if total_neurons_per_lang > 0 else 0.0
         print(f"  - {lang}: {count}/{total_neurons_per_lang} ({pct:.2f}%)")
 
+    counts_per_layer = selected_mask.sum(dim=(0, 2))
+    total_selected = int(counts_per_layer.sum().item())
+    print(f"[{key}] selected neuron layer distribution (all languages):")
+    if total_selected == 0:
+        print("  - no neurons selected")
+    else:
+        for layer_idx, layer_count_tensor in enumerate(counts_per_layer):
+            layer_count = int(layer_count_tensor.item())
+            pct = (layer_count / total_selected) * 100.0
+            print(f"  - layer {layer_idx}: {layer_count}/{total_selected} ({pct:.2f}%)")
+
     return counts_per_lang, total_neurons_per_lang
 
 

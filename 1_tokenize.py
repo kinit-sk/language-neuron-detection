@@ -24,13 +24,22 @@ def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_to
         dataset = None
         dataset_iter = None
         try:
-            dataset = load_dataset(
-                dataset_name,
-                lang_name,
-                split="train",
-                streaming=True,
-                download_config=download_config,
-            )
+            if lang_name == "en_Latn":
+                dataset = load_dataset(
+                    "HuggingFaceFW/fineweb",
+                    "default",
+                    split="train",
+                    streaming=True,
+                    download_config=download_config,
+                )
+            else:
+                dataset = load_dataset(
+                    dataset_name,
+                    lang_name,
+                    split="train",
+                    streaming=True,
+                    download_config=download_config,
+                )
 
             dataset_iter = iter(dataset)
             for item in dataset_iter:

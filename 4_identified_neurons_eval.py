@@ -303,6 +303,33 @@ def _save_heatmap_from_csv(csv_path: str, png_path: str):
     plt.close()
 
 
+def _compute_diag_offdiag_metric(
+    row_langs: list[str],
+    col_langs: list[str],
+    matrix: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    diagonal_sum = 0.0
+    off_diagonal_sum = 0.0
+    total_sum = 0.0
+
+    for row_lang in row_langs:
+        row = matrix[row_lang]
+        for col_lang in col_langs:
+            value = float(row[col_lang])
+            total_sum += value
+            if row_lang == col_lang:
+                diagonal_sum += value
+            else:
+                off_diagonal_sum += value
+
+    return {
+        "diagonal_sum": diagonal_sum,
+        "off_diagonal_sum": off_diagonal_sum,
+        "diag_minus_offdiag": diagonal_sum - off_diagonal_sum,
+        "diag_fraction_of_total": (diagonal_sum / total_sum) if total_sum != 0.0 else 0.0,
+    }
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
@@ -385,6 +412,7 @@ def main(cfg: DictConfig):
     _save_matrix_csv(csv_path, row_languages, col_languages, matrix)
     png_path = os.path.join(save_dir, "log_ppx_ratio_matrix.png")
     _save_heatmap_from_csv(csv_path, png_path)
+    diag_metric = _compute_diag_offdiag_metric(row_languages, col_languages, matrix)
 
     result_payload = {
         "selected_neurons_path": selected_path,
@@ -398,6 +426,7 @@ def main(cfg: DictConfig):
         "metric": "log(ppx_after / ppx_before)",
         "baseline_ppx_before": baseline_ppx,
         "matrix": matrix,
+        "diag_offdiag_metric": diag_metric,
     }
 
     pt_path = os.path.join(save_dir, "log_ppx_ratio_matrix.pt")
@@ -405,6 +434,12 @@ def main(cfg: DictConfig):
     print(f"Saved matrix CSV to {csv_path}")
     print(f"Saved heatmap PNG to {png_path}")
     print(f"Saved matrix artifact to {pt_path}")
+    print(
+        "Diagonal/off-diagonal metric: "
+        f"diagonal_sum={diag_metric['diagonal_sum']:.6f}, "
+        f"off_diagonal_sum={diag_metric['off_diagonal_sum']:.6f}, "
+        f"diag_minus_offdiag={diag_metric['diag_minus_offdiag']:.6f}"
+    )
 
 
 if __name__ == "__main__":

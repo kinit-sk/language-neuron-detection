@@ -120,6 +120,8 @@ def _record_mlp(
                 stats["over_threshold"][layer_idx] += (tracked > 0).sum(dim=(0, 1)).cpu()
                 stats["counts"][layer_idx] += tracked.size(0) * tracked.size(1)
             else:
+                # The same as the first variant only using abs()
+                # because tracked is not after Silu here.
                 _accumulate_act(stats, layer_idx, tracked, threshold)
         return
 
