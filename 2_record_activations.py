@@ -57,18 +57,11 @@ def _resolve_recording_strategy(cfg: DictConfig) -> str:
 
 def _resolve_mlp_variant(cfg: DictConfig) -> str:
     variant_raw = str(cfg.identify_neurons.record_activations.variant).strip().lower()
-    aliases = {
-        "gate": "gated",
-        "gated": "gated",
-        "gated_up": "gate_up",
-        "gate_up": "gate_up",
-    }
-    if variant_raw not in aliases:
+    if variant_raw not in {"gate", "gate_up"}:
         raise ValueError(
-            "record_activations.variant must be one of: 'gated', 'gate_up' "
-            "(aliases: 'gate', 'gated_up')"
+            "record_activations.variant must be one of: 'gate', 'gate_up'"
         )
-    return aliases[variant_raw]
+    return variant_raw
 
 
 def _resolve_activation_thresholds(cfg: DictConfig) -> tuple[float, float]:
@@ -114,7 +107,7 @@ def _record_mlp(
 
     if recording_strategy == "act":
         with torch.no_grad():
-            if mlp_variant == "gated":
+            if mlp_variant == "gate":
                 tracked_clean = _safe_float_tensor(tracked.detach())
                 stats["sums"][layer_idx] += tracked_clean.sum(dim=(0, 1)).cpu()
                 stats["over_threshold"][layer_idx] += (tracked > 0).sum(dim=(0, 1)).cpu()
@@ -170,7 +163,7 @@ def register_mlp_patched_forward(
         gate_act = F.silu(gate)
         up = self.up_proj(x)
         gated = gate_act * up
-        tracked = gate_act if mlp_variant == "gated" else gated
+        tracked = gate_act if mlp_variant == "gate" else gated
 
         _record_mlp(
             mlp_grad_stats,
