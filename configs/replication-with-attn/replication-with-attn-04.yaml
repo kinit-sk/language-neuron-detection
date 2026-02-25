@@ -12,19 +12,20 @@ identify_neurons: # identify neurons
 
   tokenize:
     target_num_tokens: 1_000_000
-    save_dir: "data/1_output"
+    save_dir: "data/1_output/replication-with-attn"
 
   record_activations:
     batch_size: 4
     chunk_size: 4096
     max_tokens: -1 # 4096 # -1 # means no limit
     mlp_activation_threshold: 0.0
-    attn_activation_threshold: 0.7
+    attn_activation_threshold: 0.4
     components:
       - mlp
       - attn
     recording_strategy: "act" # options: "act", "grad_act"
     variant: "gate" # options: "gate", "gate_up"
+    extend_laod_dir_with_ex_name: false # Allow to load tokens exactly using tokenize.save_dir
     save_dir: "data/2_output"
 
     visualize:

@@ -304,7 +304,10 @@ def save_activations(
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
-    tokenize_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
+    if cfg.identify_neurons.record_activations.extend_laod_dir_with_ex_name:
+        tokenize_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
+    else:
+        tokenize_path = cfg.identify_neurons.tokenize.save_dir
     if not os.path.exists(tokenize_path):
         raise FileNotFoundError("Tokenized data directory does not exist: ensure tokenization step is completed first")
 
@@ -350,7 +353,7 @@ def main(cfg: DictConfig):
             attn_activation_threshold,
         )
 
-        ids = torch.load(os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id, f"{lang}.pt"))
+        ids = torch.load(os.path.join(tokenize_path, f"{lang}.pt"))
         print(f"{lang} tokens loaded succesfully")
         if cfg.identify_neurons.record_activations.max_tokens > 0:
             size_to_use = min(len(ids), cfg.identify_neurons.record_activations.max_tokens)

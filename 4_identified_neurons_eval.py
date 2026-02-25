@@ -81,8 +81,10 @@ def _build_eval_data_cfg(cfg: DictConfig, ex_id: str) -> EvalDataConfig:
     tokenized_dir = eval_cfg.get("tokenized_dir")
     if tokenized_dir:
         resolved = str(tokenized_dir)
-    else:
+    elif cfg.identify_neurons.record_activations.extend_laod_dir_with_ex_name:
         resolved = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
+    else:
+        resolved = cfg.identify_neurons.tokenize.save_dir
     return EvalDataConfig(
         tokenized_dir=resolved,
     )
