@@ -49,3 +49,11 @@ identify_neurons: # identify neurons
     target_num_tokens: 131072
     seq_len: 1024
     batch_size: 1
+
+  generate_language_specific_model:
+    selected_neurons_path: null # null -> uses data/3_output/<config_name>/lape_selected_neurons.pt
+    save_dir: "data/5_output"
+    extend_save_dir_with_ex_name: true
+    save_tokenizer: true
+    safe_serialization: true
+    torch_dtype: null # null -> model default dtype, or set e.g. "float16" / "bfloat16"
