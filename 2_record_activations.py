@@ -304,7 +304,7 @@ def save_activations(
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
-    if cfg.identify_neurons.record_activations.extend_laod_dir_with_ex_name:
+    if cfg.identify_neurons.record_activations.extend_load_dir_with_ex_name:
         tokenize_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
     else:
         tokenize_path = cfg.identify_neurons.tokenize.save_dir

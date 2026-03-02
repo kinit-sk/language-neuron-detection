@@ -24,6 +24,7 @@ identify_neurons: # identify neurons
       - mlp # - attn
     recording_strategy: "act" # options: "act", "grad_act"
     variant: "gate_up" # options: "gate", "gate_up"
+    extend_load_dir_with_ex_name: true # Allow to load tokens exactly using tokenize.save_dir
     save_dir: "data/2_output"
 
     visualize:

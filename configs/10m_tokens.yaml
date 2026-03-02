@@ -25,6 +25,7 @@ identify_neurons: # identify neurons
       - attn
     recording_strategy: "grad_act"
     variant: "gate" 
+    extend_load_dir_with_ex_name: true # Allow to load tokens exactly using tokenize.save_dir
     save_dir: "data/2_output"
     visualize:
       recording_strategy: "grad_act"
