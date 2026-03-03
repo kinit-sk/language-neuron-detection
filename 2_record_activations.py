@@ -10,7 +10,7 @@ from omegaconf import DictConfig, ListConfig
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM
 
-from misc import get_device, set_ex_id_from_config_name
+from misc import get_device, get_pipeline_step, set_ex_id_from_config_name
 
 
 def _safe_float_tensor(x: torch.Tensor) -> torch.Tensor:
@@ -29,7 +29,8 @@ def _init_stats(num_layers: int, width: int) -> dict[str, torch.Tensor]:
 
 
 def _resolve_record_components(cfg: DictConfig) -> tuple[bool, bool]:
-    components = cfg.identify_neurons.record_activations.get("components", ["mlp", "attn"])
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
+    components = record_cfg.get("components", ["mlp", "attn"])
     if isinstance(components, str):
         components = [components]
     if isinstance(components, ListConfig):
@@ -46,7 +47,8 @@ def _resolve_record_components(cfg: DictConfig) -> tuple[bool, bool]:
 
 
 def _resolve_recording_strategy(cfg: DictConfig) -> str:
-    recording_strategy = str(cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")).strip().lower()
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
+    recording_strategy = str(record_cfg.get("recording_strategy", "grad_act")).strip().lower()
     if recording_strategy not in {"grad_act", "act"}:
         raise ValueError(
             f"Unsupported recording_strategy='{recording_strategy}'. "
@@ -56,7 +58,8 @@ def _resolve_recording_strategy(cfg: DictConfig) -> str:
 
 
 def _resolve_mlp_variant(cfg: DictConfig) -> str:
-    variant_raw = str(cfg.identify_neurons.record_activations.variant).strip().lower()
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
+    variant_raw = str(record_cfg.variant).strip().lower()
     if variant_raw not in {"gate", "gate_up"}:
         raise ValueError(
             "record_activations.variant must be one of: 'gate', 'gate_up'"
@@ -65,7 +68,7 @@ def _resolve_mlp_variant(cfg: DictConfig) -> str:
 
 
 def _resolve_activation_thresholds(cfg: DictConfig) -> tuple[float, float]:
-    record_cfg = cfg.identify_neurons.record_activations
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
     mlp_threshold = float(record_cfg.get("mlp_activation_threshold", 0.0))
     attn_threshold = float(record_cfg.get("attn_activation_threshold", 0.0))
     return mlp_threshold, attn_threshold
@@ -304,10 +307,12 @@ def save_activations(
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
-    if cfg.identify_neurons.record_activations.extend_load_dir_with_ex_name:
-        tokenize_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
+    tokenize_cfg = get_pipeline_step(cfg, "step1_tokenize")
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
+    if record_cfg.extend_load_dir_with_ex_name:
+        tokenize_path = os.path.join(tokenize_cfg.save_dir, ex_id)
     else:
-        tokenize_path = cfg.identify_neurons.tokenize.save_dir
+        tokenize_path = tokenize_cfg.save_dir
     if not os.path.exists(tokenize_path):
         raise FileNotFoundError("Tokenized data directory does not exist: ensure tokenization step is completed first")
 
@@ -316,8 +321,8 @@ def main(cfg: DictConfig):
     model = AutoModelForCausalLM.from_pretrained(cfg.main.model_path, dtype=torch.float16).to(device, non_blocking=True)
     model.eval()
 
-    chunk_size = cfg.identify_neurons.record_activations.chunk_size
-    batch_size = cfg.identify_neurons.record_activations.batch_size
+    chunk_size = record_cfg.chunk_size
+    batch_size = record_cfg.batch_size
     recording_strategy = _resolve_recording_strategy(cfg)
     mlp_activation_threshold, attn_activation_threshold = _resolve_activation_thresholds(cfg)
     include_mlp, include_attn = _resolve_record_components(cfg)
@@ -355,8 +360,8 @@ def main(cfg: DictConfig):
 
         ids = torch.load(os.path.join(tokenize_path, f"{lang}.pt"))
         print(f"{lang} tokens loaded succesfully")
-        if cfg.identify_neurons.record_activations.max_tokens > 0:
-            size_to_use = min(len(ids), cfg.identify_neurons.record_activations.max_tokens)
+        if record_cfg.max_tokens > 0:
+            size_to_use = min(len(ids), record_cfg.max_tokens)
         else:
             size_to_use = len(ids)
         num_tokens = (size_to_use // chunk_size) * chunk_size
@@ -381,7 +386,7 @@ def main(cfg: DictConfig):
                 with torch.no_grad():
                     model(batch, use_cache=False)
 
-        save_path = os.path.join(cfg.identify_neurons.record_activations.save_dir, ex_id)
+        save_path = os.path.join(record_cfg.save_dir, ex_id)
         save_activations(
             mlp_grad_stats,
             attn_grad_stats,

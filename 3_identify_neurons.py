@@ -5,7 +5,7 @@ import hydra
 import torch
 from omegaconf import DictConfig, ListConfig
 
-from misc import set_ex_id_from_config_name
+from misc import get_pipeline_step, set_ex_id_from_config_name
 
 
 def _safe_abs(x: torch.Tensor) -> torch.Tensor:
@@ -33,7 +33,8 @@ def _resolve_activation_path(load_dir: str, lang: str, recording_strategy: str) 
 
 
 def _resolve_record_components(cfg: DictConfig) -> tuple[bool, bool]:
-    components = cfg.identify_neurons.record_activations.get("components", ["mlp", "attn"])
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
+    components = record_cfg.get("components", ["mlp", "attn"])
     if isinstance(components, str):
         components = [components]
     elif isinstance(components, ListConfig):
@@ -198,19 +199,20 @@ def _log_selection_stats(key: str, selected_mask: torch.Tensor, languages: list[
 
 
 def _resolve_filter_rate(cfg: DictConfig, recording_strategy: str) -> float:
-    select_cfg = cfg.identify_neurons.select_neurons
-    by_strategy = select_cfg.get("filter_rate_by_strategy", None)
+    identify_cfg = get_pipeline_step(cfg, "step3_identify_neurons")
+    by_strategy = identify_cfg.get("filter_rate_by_strategy", None)
     if by_strategy is not None and recording_strategy in by_strategy:
         return float(by_strategy[recording_strategy])
-    return float(select_cfg.filter_rate)
+    return float(identify_cfg.filter_rate)
 
 
 def _resolve_lape_metric(cfg: DictConfig) -> str:
-    raw = str(cfg.identify_neurons.select_neurons.get("recorded_metric", "grad_average_activations")).strip().lower()
+    identify_cfg = get_pipeline_step(cfg, "step3_identify_neurons")
+    raw = str(identify_cfg.get("recorded_metric", "grad_average_activations")).strip().lower()
     valid = {"grad_average_activations", "over_threshold_rate"}
     if raw not in valid:
         raise ValueError(
-            "identify_neurons.select_neurons.recorded_metric must be one of: "
+            "pipeline.step3_identify_neurons.recorded_metric must be one of: "
             "'grad_average_activations', 'over_threshold_rate'"
         )
     return raw
@@ -219,17 +221,19 @@ def _resolve_lape_metric(cfg: DictConfig) -> str:
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
-    load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, ex_id)
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
+    identify_cfg = get_pipeline_step(cfg, "step3_identify_neurons")
+    load_dir = os.path.join(record_cfg.save_dir, ex_id)
     if not os.path.isdir(load_dir):
         raise FileNotFoundError(f"Activation directory not found: {load_dir}")
-    save_dir = os.path.join(cfg.identify_neurons.select_neurons.save_dir, ex_id)
+    save_dir = os.path.join(identify_cfg.save_dir, ex_id)
     os.makedirs(save_dir, exist_ok=True)
 
     languages = list(cfg.main.languages)
-    recording_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
-    top_rate = float(cfg.identify_neurons.select_neurons.top_rate)
+    recording_strategy = record_cfg.get("recording_strategy", "grad_act")
+    top_rate = float(identify_cfg.top_rate)
     filter_rate = _resolve_filter_rate(cfg, recording_strategy)
-    activation_bar_ratio = float(cfg.identify_neurons.select_neurons.activation_bar_ratio)
+    activation_bar_ratio = float(identify_cfg.activation_bar_ratio)
     lape_metric = _resolve_lape_metric(cfg)
     include_mlp, include_attn = _resolve_record_components(cfg)
 

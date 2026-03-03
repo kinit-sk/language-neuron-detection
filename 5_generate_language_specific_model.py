@@ -6,7 +6,7 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from misc import set_ex_id_from_config_name
+from misc import get_pipeline_step, set_ex_id_from_config_name
 
 
 MLP_KEYS = (
@@ -35,10 +35,10 @@ COMPONENT_KEYS = {
 
 
 def _resolve_generate_cfg(cfg: DictConfig) -> DictConfig:
-    generate_cfg = cfg.identify_neurons.get("generate_language_specific_model")
-    if generate_cfg is None:
+    try:
+        return get_pipeline_step(cfg, "step5_generate_language_specific_model")
+    except KeyError:
         return OmegaConf.create({})
-    return generate_cfg
 
 
 def _resolve_selected_neurons_path(cfg: DictConfig, ex_id: str) -> str:
@@ -46,8 +46,9 @@ def _resolve_selected_neurons_path(cfg: DictConfig, ex_id: str) -> str:
     override_path = generate_cfg.get("selected_neurons_path")
     if override_path:
         return str(override_path)
+    identify_cfg = get_pipeline_step(cfg, "step3_identify_neurons")
     return os.path.join(
-        cfg.identify_neurons.select_neurons.save_dir,
+        identify_cfg.save_dir,
         ex_id,
         "lape_selected_neurons.pt",
     )
@@ -161,7 +162,7 @@ def main(cfg: DictConfig):
         dtype_name = str(model_dtype)
         torch_dtype = getattr(torch, dtype_name, None)
         if torch_dtype is None:
-            raise ValueError(f"Unsupported generate_language_specific_model.torch_dtype: {dtype_name}")
+            raise ValueError(f"Unsupported pipeline.step5_generate_language_specific_model.torch_dtype: {dtype_name}")
 
     save_tokenizer = bool(generate_cfg.get("save_tokenizer", True))
     safe_serialization = bool(generate_cfg.get("safe_serialization", True))

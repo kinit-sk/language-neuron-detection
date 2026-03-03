@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from omegaconf import DictConfig
 from transformers import AutoModelForCausalLM
 
-from misc import get_device, set_ex_id_from_config_name
+from misc import get_device, get_pipeline_step, set_ex_id_from_config_name
 
 
 MLP_KEYS = (
@@ -57,11 +57,13 @@ class EvalDataConfig:
 
 
 def _resolve_selected_neurons_path(cfg: DictConfig, ex_id: str) -> str:
-    override_path = cfg.identify_neurons.evaluate_identified_neurons.selected_neurons_path
+    eval_cfg = get_pipeline_step(cfg, "step4_identified_neurons_eval")
+    override_path = eval_cfg.selected_neurons_path
     if override_path:
         return str(override_path)
+    identify_cfg = get_pipeline_step(cfg, "step3_identify_neurons")
     return os.path.join(
-        cfg.identify_neurons.select_neurons.save_dir,
+        identify_cfg.save_dir,
         ex_id,
         "lape_selected_neurons.pt",
     )
@@ -77,14 +79,16 @@ def _load_selected_neurons(path: str) -> dict[str, Any]:
 
 
 def _build_eval_data_cfg(cfg: DictConfig, ex_id: str) -> EvalDataConfig:
-    eval_cfg = cfg.identify_neurons.evaluate_identified_neurons
+    eval_cfg = get_pipeline_step(cfg, "step4_identified_neurons_eval")
+    tokenize_cfg = get_pipeline_step(cfg, "step1_tokenize")
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
     tokenized_dir = eval_cfg.get("tokenized_dir")
     if tokenized_dir:
         resolved = str(tokenized_dir)
-    elif cfg.identify_neurons.record_activations.extend_load_dir_with_ex_name:
-        resolved = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
+    elif record_cfg.extend_load_dir_with_ex_name:
+        resolved = os.path.join(tokenize_cfg.save_dir, ex_id)
     else:
-        resolved = cfg.identify_neurons.tokenize.save_dir
+        resolved = tokenize_cfg.save_dir
     return EvalDataConfig(
         tokenized_dir=resolved,
     )
@@ -99,7 +103,7 @@ def _load_language_tokens(
     if not os.path.exists(token_path):
         raise FileNotFoundError(
             f"Tokenized file not found for {lang}: {token_path}. "
-            "Run 1_tokenize.py first or set evaluate_identified_neurons.tokenized_dir."
+            "Run 1_tokenize.py first or set pipeline.step4_identified_neurons_eval.tokenized_dir."
         )
 
     token_ids = torch.load(token_path, map_location="cpu")
@@ -335,7 +339,7 @@ def _compute_diag_offdiag_metric(
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
-    eval_cfg = cfg.identify_neurons.evaluate_identified_neurons
+    eval_cfg = get_pipeline_step(cfg, "step4_identified_neurons_eval")
     selected_path = _resolve_selected_neurons_path(cfg, ex_id)
     selected = _load_selected_neurons(selected_path)
 

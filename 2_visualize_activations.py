@@ -8,7 +8,7 @@ import seaborn as sns
 import torch
 from omegaconf import DictConfig
 
-from misc import set_ex_id_from_config_name
+from misc import get_pipeline_step, set_ex_id_from_config_name
 
 
 class ActivationVisualizer:
@@ -134,19 +134,20 @@ class ActivationVisualizer:
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
+    record_cfg = get_pipeline_step(cfg, "step2_record_activations")
 
-    load_dir = os.path.join(cfg.identify_neurons.record_activations.save_dir, ex_id)
-    default_strategy = cfg.identify_neurons.record_activations.get("recording_strategy", "grad_act")
-    visualize_cfg = cfg.identify_neurons.record_activations.get("visualize", None)
+    load_dir = os.path.join(record_cfg.save_dir, ex_id)
+    default_strategy = record_cfg.get("recording_strategy", "grad_act")
+    visualize_cfg = record_cfg.get("visualize", None)
     recording_strategy = (
         visualize_cfg.get("recording_strategy", default_strategy)
         if visualize_cfg is not None
         else default_strategy
     )
     out_base_dir = (
-        visualize_cfg.get("save_dir", cfg.identify_neurons.record_activations.save_dir)
+        visualize_cfg.get("save_dir", record_cfg.save_dir)
         if visualize_cfg is not None
-        else cfg.identify_neurons.record_activations.save_dir
+        else record_cfg.save_dir
     )
     out_dir = os.path.join(out_base_dir, ex_id)
     visualizer = ActivationVisualizer(

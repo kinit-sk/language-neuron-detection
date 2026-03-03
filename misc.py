@@ -1,6 +1,7 @@
 import os
 
 from hydra.core.hydra_config import HydraConfig
+from omegaconf import DictConfig
 import torch
 
 
@@ -22,3 +23,14 @@ def set_ex_id_from_config_name() -> str:
     if not config_name:
         raise RuntimeError("Hydra job config_name is missing; cannot derive ex_id")
     return os.path.splitext(os.path.basename(str(config_name)))[0]
+
+
+def get_pipeline_step(cfg: DictConfig, step_name: str) -> DictConfig:
+    pipeline_cfg = cfg.get("pipeline")
+    if pipeline_cfg is None:
+        raise KeyError("Missing required top-level config section: pipeline")
+
+    step_cfg = pipeline_cfg.get(step_name)
+    if step_cfg is None:
+        raise KeyError(f"Missing required pipeline step config: pipeline.{step_name}")
+    return step_cfg

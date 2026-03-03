@@ -7,7 +7,7 @@ from datasets import DownloadConfig, load_dataset
 from omegaconf import DictConfig
 from transformers import AutoTokenizer
 
-from misc import set_ex_id_from_config_name
+from misc import get_pipeline_step, set_ex_id_from_config_name
 
 # Avoid native tokenizer worker threads surviving into interpreter shutdown.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -71,11 +71,12 @@ def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_to
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
-    save_path = os.path.join(cfg.identify_neurons.tokenize.save_dir, ex_id)
+    tokenize_cfg = get_pipeline_step(cfg, "step1_tokenize")
+    save_path = os.path.join(tokenize_cfg.save_dir, ex_id)
     os.makedirs(save_path, exist_ok=True)
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.main.model_path, use_fast=True)
-    target_num_tokens = cfg.identify_neurons.tokenize.target_num_tokens
+    target_num_tokens = tokenize_cfg.target_num_tokens
 
     for lang in cfg.main.languages:
         print(f"\n=======================\nProcessing language: {lang}\n")
@@ -84,7 +85,7 @@ def main(cfg: DictConfig):
             dataset_name = "HuggingFaceFW/fineweb"
             lang_name = "default"
         else:
-            dataset_name = cfg.identify_neurons.dataset_path
+            dataset_name = tokenize_cfg.dataset_path
             lang_name = lang
 
         tensor_ids, reached_target = stream_tokens_with_retries(
