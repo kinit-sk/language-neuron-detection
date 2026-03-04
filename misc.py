@@ -1,19 +1,16 @@
 import os
 
+import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
-import torch
 
 
-def get_device():
+def get_device() -> torch.device:
     if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-    return device
-
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 def set_ex_id_from_config_name() -> str:

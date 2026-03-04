@@ -13,3 +13,5 @@ results/*
 eval/perplexity/outputs/
 eval/perplexity/results/
 *.log
+
+AGENTS.md

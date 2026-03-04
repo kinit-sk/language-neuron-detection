@@ -1,117 +1,135 @@
-"""
-this script calculates the entropy of neuron activations 
-calculated in record_activations.py and saves the results to a .pt file
-"""
-
 import os
+
 import torch
 
-def calculate_entropy(model_path, langs, target_num_tokens,
-                      top_rate, filter_rate, activation_bar_ratio, visualize=True, debug=False, ):
-    n, over_zero = [], []
+
+def load_activation_counts(model_path: str, langs: list[str], target_num_tokens: int) -> torch.Tensor:
+    model_name = model_path.split("/")[1:][0]
+    load_dir = os.path.join("activations", model_name, f"{target_num_tokens}T")
+    over_zero = []
+
     for lang in langs:
-        load_path = f"activations/{model_path.split('/')[1:][0]}/{target_num_tokens}T"
-        data = torch.load(f'{load_path}/{lang}-activations.pt')
-        n.append(data['n'])
-        over_zero.append(data['over_zero'])
+        file_path = os.path.join(load_dir, f"{lang}-activations.pt")
+        data = torch.load(file_path, map_location="cpu")
+        over_zero.append(data["over_zero"])
 
-    n = torch.tensor(n) # number of tokens per language
-    over_zero = torch.stack(over_zero, dim=-1) # number of times neuron >0 per language
-    
-    num_layers, intermediate_size, lang_num = over_zero.size()
-    print(f"📂 {len(langs)} languages loaded succesfully")
-    if debug: print(f"layers: {num_layers}, intermediate size: {intermediate_size}, number of languages: {lang_num}")
+    return torch.stack(over_zero, dim=0)
 
 
-    # top_rate = 0.2
-    # filter_rate = 0.95
-    # activation_bar_ratio = 0.95
-    activation_probs = over_zero / n  # [layer, inter, lang]
+def select_language_neurons(
+    stacked: torch.Tensor,
+    top_rate: float,
+    filter_rate: float,
+    activation_bar_ratio: float,
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    n_lang, n_layers, width = stacked.shape
+    activation_probs = stacked.permute(1, 2, 0).contiguous()
     normed_activation_probs = activation_probs / activation_probs.sum(dim=-1, keepdim=True)
     normed_activation_probs[torch.isnan(normed_activation_probs)] = 0
 
-    log_probs = torch.where(normed_activation_probs > 0, normed_activation_probs.log(), 0)
+    log_probs = torch.where(
+        normed_activation_probs > 0,
+        normed_activation_probs.log(),
+        torch.zeros_like(normed_activation_probs),
+    )
     entropy = -torch.sum(normed_activation_probs * log_probs, dim=-1)
-    largest = False
+    if torch.isnan(entropy).any():
+        raise ValueError("NaN values found in entropy")
 
-    if torch.isnan(entropy).sum():
-        print(torch.isnan(entropy).sum())
-        raise ValueError
-    
-    # --- Print original number of neurons ---
-    total_neurons = activation_probs.size(0) * activation_probs.size(1)
-    print("\n0️⃣  Total original neurons:", total_neurons)
-
-    # --- First threshold: filter neurons that are ever above the filter_rate ---
     flattened_probs = activation_probs.flatten()
-    top_prob_value = flattened_probs.kthvalue(round(len(flattened_probs) * filter_rate)).values.item()
-    if debug:  print("Filter rate threshold value =", top_prob_value)
-
+    top_prob_k = round(len(flattened_probs) * filter_rate)
+    top_prob_value = flattened_probs.kthvalue(top_prob_k).values.item()
     top_position = (activation_probs > top_prob_value).sum(dim=-1)
-    entropy[top_position == 0] = -torch.inf if largest else torch.inf
+    entropy[top_position == 0] = torch.inf
 
-    neurons_after_first_threshold = (top_position != 0).sum().item()
-    print("1️⃣  Neurons after first threshold (filter rate):", neurons_after_first_threshold)
-
-    # --- Second threshold: topk by entropy ---
     flattened_entropy = entropy.flatten()
-    top_entropy_value = round(len(flattened_entropy) * top_rate)
-    _, index = flattened_entropy.topk(top_entropy_value, largest=largest)
+    top_entropy_k = round(len(flattened_entropy) * top_rate)
+    _, index = flattened_entropy.topk(top_entropy_k, largest=False)
     row_index = index // entropy.size(1)
     col_index = index % entropy.size(1)
-    selected_probs = activation_probs[row_index, col_index]  # [n, lang]
+    selected_probs = activation_probs[row_index, col_index]
 
-    selected_probs = selected_probs.transpose(0, 1)
-    activation_bar = flattened_probs.kthvalue(round(len(flattened_probs) * activation_bar_ratio)).values.item()
-    if debug: print("Second activation bar threshold value =", activation_bar)
+    selected_probs_by_lang = selected_probs.transpose(0, 1)
+    activation_bar_k = round(len(flattened_probs) * activation_bar_ratio)
+    activation_bar = flattened_probs.kthvalue(activation_bar_k).values.item()
+    lang_index, selected_index = torch.where(selected_probs_by_lang > activation_bar)
 
-    above_second_threshold = (selected_probs > activation_bar).sum().item()
-    print("2️⃣  Neurons after second threshold (activation bar):", above_second_threshold)
-
-    lang, indice = torch.where(selected_probs > activation_bar)
-    num_after_activation_bar = len(indice)
-
-    if debug: print((selected_probs > activation_bar).sum(dim=1).tolist())
-
+    selected_mask = torch.zeros((n_lang, n_layers, width), dtype=torch.bool)
+    counts_by_lang = torch.bincount(lang_index, minlength=n_lang)
     merged_index = torch.stack((row_index, col_index), dim=-1)
-    final_indices_per_lang = {}
 
-    for lang_idx, index in enumerate(indice.split(torch.bincount(lang).tolist())):
-        lang_index = [tuple(row.tolist()) for row in merged_index[index]]
-        lang_index.sort()
-        layer_index = [[] for _ in range(num_layers)]
-        for l, h in lang_index:
-            layer_index[l].append(h)
-        for l, h in enumerate(layer_index):
-            layer_index[l] = torch.tensor(h).long()
-        final_indices_per_lang[langs[lang_idx]] = layer_index
+    for current_lang_idx, split_idx in enumerate(selected_index.split(counts_by_lang.tolist())):
+        if split_idx.numel() == 0:
+            continue
+        for layer_idx, hidden_idx in merged_index[split_idx].tolist():
+            selected_mask[current_lang_idx, layer_idx, hidden_idx] = True
 
-    total_selected = sum(x.numel() for lang in final_indices_per_lang.values() for x in lang)
-    print(f"\n✅ Approximate selected neurons for one language: {total_selected/len(langs)} 🧠")
+    stats = {
+        "total_neurons": torch.tensor(n_layers * width),
+        "neurons_after_filter_rate": (top_position != 0).sum(),
+        "neurons_after_activation_bar": (selected_probs_by_lang > activation_bar).sum(),
+    }
+    return {"selected_mask": selected_mask, "top_valid": selected_probs_by_lang > activation_bar}, stats
 
-    save_path = f"entropies/{model_path.split('/')[1:][0]}"
-    os.makedirs(save_path, exist_ok=True)
-    torch.save(final_indices_per_lang, f'{save_path}/entropy-{target_num_tokens}T.pt')
 
-    print(f"📁 Saved entropies to {save_path}/ )\n")
+def build_final_indices(selected_mask: torch.Tensor, langs: list[str]) -> dict[str, list[torch.Tensor]]:
+    final_indices_per_lang: dict[str, list[torch.Tensor]] = {}
+
+    for lang_idx, lang in enumerate(langs):
+        per_layer = []
+        for layer_idx in range(selected_mask.size(1)):
+            indices = torch.nonzero(selected_mask[lang_idx, layer_idx], as_tuple=False).squeeze(1).to(torch.long)
+            per_layer.append(indices)
+        final_indices_per_lang[lang] = per_layer
+
+    return final_indices_per_lang
+
+
+def calculate_entropy(
+    model_path: str,
+    langs: list[str],
+    target_num_tokens: int,
+    top_rate: float,
+    filter_rate: float,
+    activation_bar_ratio: float,
+    visualize: bool = False,
+    debug: bool = False,
+):
+    stacked = load_activation_counts(model_path, langs, target_num_tokens)
+    print(f"Loaded activation counts for {len(langs)} languages")
+    if debug:
+        print(f"Stacked tensor shape: {tuple(stacked.shape)}")
+
+    selection, stats = select_language_neurons(stacked, top_rate, filter_rate, activation_bar_ratio)
+    selected_mask = selection["selected_mask"]
+    final_indices_per_lang = build_final_indices(selected_mask, langs)
+
+    print(f"Total original neurons: {int(stats['total_neurons'].item())}")
+    print(f"Neurons after filter-rate threshold: {int(stats['neurons_after_filter_rate'].item())}")
+    print(f"Neurons after activation-bar threshold: {int(stats['neurons_after_activation_bar'].item())}")
+
+    total_selected = sum(indices.numel() for per_lang in final_indices_per_lang.values() for indices in per_lang)
+    print(f"Approximate selected neurons per language: {total_selected / len(langs):.2f}")
+
+    model_name = model_path.split("/")[1:][0]
+    save_dir = os.path.join("entropies", model_name)
+    os.makedirs(save_dir, exist_ok=True)
+    output_path = os.path.join(save_dir, f"entropy-{target_num_tokens}T.pt")
+    torch.save(final_indices_per_lang, output_path)
+    print(f"Saved entropies to {output_path}")
 
     if visualize:
-        from visual import visualize_entropies
-        visualize_entropies(final_indices_per_lang, model_path, target_num_tokens)
-        
+        print("Visualization is not implemented in this legacy utility.")
+
 
 if __name__ == "__main__":
     calculate_entropy(
-        # model_path = "Qwen/Qwen2.5-0.5B-Instruct",
-        # model_path = "nvidia/Mistral-NeMo-Minitron-8B-Base",
-        model_path = "meta-llama/Meta-Llama-3-8B",
-        langs = ["en", "de", "fr", "es", "sk", "pl", "ja", "zh"],
-        target_num_tokens = 200_000,
+        model_path="meta-llama/Meta-Llama-3-8B",
+        langs=["en", "de", "fr", "es", "sk", "pl", "ja", "zh"],
+        target_num_tokens=200_000,
         top_rate=0.04,
         filter_rate=0.95,
         activation_bar_ratio=0.85,
-        visualize=True,
+        visualize=False,
         debug=False,
     )
-
-
