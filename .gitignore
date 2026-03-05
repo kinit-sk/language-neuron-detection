@@ -5,6 +5,13 @@ mlruns/*
 prompts/*
 outputs/*
 results/*
+
+# Track only the shared template config
+configs/**/*.yaml
+configs/**/*.yml
+!configs/default.yaml
+!configs/example.yaml
+
  
 .python-version
 .DS_Store
@@ -16,3 +23,4 @@ eval/perplexity/results/
 *.log
 
 AGENTS.md
+tmp.ipynb
