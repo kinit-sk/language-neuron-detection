@@ -106,6 +106,7 @@ def _load_language_tokens(
         lang=lang,
         tokenized_dir=data_cfg.tokenized_dir,
         target_num_tokens=target_num_tokens,
+        split_prefix="val",
         missing_hint="Run 1_tokenize.py first or set pipeline.step4_identified_neurons_eval.tokenized_dir.",
     )
 

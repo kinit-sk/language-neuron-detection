@@ -16,7 +16,7 @@ os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 
-def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_tokens, max_retries=6):
+def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, split_name, target_num_tokens, max_retries=6):
     download_config = DownloadConfig(max_retries=max_retries)
 
     for attempt in range(1, max_retries + 1):
@@ -28,7 +28,7 @@ def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_to
                 dataset = load_dataset(
                     "HuggingFaceFW/fineweb",
                     "default",
-                    split="train",
+                    split=split_name,
                     streaming=True,
                     download_config=download_config,
                 )
@@ -36,7 +36,7 @@ def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_to
                 dataset = load_dataset(
                     dataset_name,
                     lang_name,
-                    split="train",
+                    split=split_name,
                     streaming=True,
                     download_config=download_config,
                 )
@@ -50,7 +50,7 @@ def stream_tokens_with_retries(tokenizer, dataset_name, lang_name, target_num_to
             return tensor_ids, False
         except (OSError, ConnectionError, TimeoutError) as exc:
             print(
-                f"Attempt {attempt}/{max_retries} failed for {dataset_name}/{lang_name}: {exc}"
+                f"Attempt {attempt}/{max_retries} failed for {dataset_name}/{lang_name}/{split_name}: {exc}"
             )
             if attempt == max_retries:
                 raise
@@ -81,28 +81,39 @@ def main(cfg: DictConfig):
     for lang in cfg.main.languages:
         print(f"\n=======================\nProcessing language: {lang}\n")
 
-        if lang == "eng_Latn":
+        if lang == "en_Latn":
             dataset_name = "HuggingFaceFW/fineweb"
             lang_name = "default"
         else:
             dataset_name = tokenize_cfg.dataset_path
             lang_name = lang
 
-        tensor_ids, reached_target = stream_tokens_with_retries(
-            tokenizer=tokenizer,
-            dataset_name=dataset_name,
-            lang_name=lang_name,
-            target_num_tokens=target_num_tokens,
-        )
+        split_plan = [("train", "train"), ("test", "val")]
+        for split_name, split_prefix in split_plan:
+            source_split = split_name
+            if dataset_name == "HuggingFaceFW/fineweb" and split_name == "test":
+                source_split = "train"
+                print(
+                    f"{dataset_name} has no validation split; creating val_{lang}.pt from train split."
+                )
 
-        if reached_target:
-            print(f"Truncated {lang} to {target_num_tokens} tokens.")
+            print(f"Tokenizing split={split_name} (source={source_split}) for {lang}")
+            tensor_ids, reached_target = stream_tokens_with_retries(
+                tokenizer=tokenizer,
+                dataset_name=dataset_name,
+                lang_name=lang_name,
+                split_name=source_split,
+                target_num_tokens=target_num_tokens,
+            )
 
-        print(f"=========== Tokenized {len(tensor_ids)} tokens for {lang}")
-        tensor_data = torch.LongTensor(tensor_ids)
-        tokens_file_path = os.path.join(save_path, f"{lang}.pt")
-        torch.save(tensor_data, tokens_file_path)
-        print(f"\nSaved tokenized data to {tokens_file_path} / ({len(tensor_data)} tokens)")
+            if reached_target:
+                print(f"Truncated {lang}/{split_name} to {target_num_tokens} tokens.")
+
+            print(f"=========== Tokenized {len(tensor_ids)} tokens for {lang}/{split_name}")
+            tensor_data = torch.LongTensor(tensor_ids)
+            tokens_file_path = os.path.join(save_path, f"{split_prefix}_{lang}.pt")
+            torch.save(tensor_data, tokens_file_path)
+            print(f"\nSaved tokenized data to {tokens_file_path} / ({len(tensor_data)} tokens)")
 
 
 if __name__ == "__main__":

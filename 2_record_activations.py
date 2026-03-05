@@ -358,7 +358,7 @@ def main(cfg: DictConfig):
             attn_activation_threshold,
         )
 
-        ids = torch.load(os.path.join(tokenize_path, f"{lang}.pt"))
+        ids = torch.load(os.path.join(tokenize_path, f"train_{lang}.pt"))
         print(f"{lang} tokens loaded succesfully")
         if record_cfg.max_tokens > 0:
             size_to_use = min(len(ids), record_cfg.max_tokens)

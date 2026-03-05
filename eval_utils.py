@@ -8,8 +8,18 @@ import torch
 import torch.nn.functional as F
 
 
-def load_token_ids(lang: str, tokenized_dir: str, target_num_tokens: int, missing_hint: str) -> torch.Tensor:
-    token_path = os.path.join(tokenized_dir, f"{lang}.pt")
+def load_token_ids(
+    lang: str,
+    tokenized_dir: str,
+    target_num_tokens: int,
+    missing_hint: str,
+    split_prefix: str | None = None,
+) -> torch.Tensor:
+    if split_prefix:
+        token_file = f"{split_prefix}_{lang}.pt"
+    else:
+        token_file = f"{lang}.pt"
+    token_path = os.path.join(tokenized_dir, token_file)
     if not os.path.exists(token_path):
         raise FileNotFoundError(f"Tokenized file not found for {lang}: {token_path}. {missing_hint}")
 

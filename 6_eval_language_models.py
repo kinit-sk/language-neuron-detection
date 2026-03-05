@@ -121,6 +121,7 @@ def main(cfg: DictConfig):
             lang=lang,
             tokenized_dir=eval_cfg.tokenized_dir,
             target_num_tokens=eval_cfg.target_num_tokens,
+            split_prefix="val",
             missing_hint="Run 1_tokenize.py first or set evaluate_language_specific_models.tokenized_dir.",
         )
         print(f"Loaded {lang}: {eval_tokens[lang].numel()} tokens")
