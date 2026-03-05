@@ -80,19 +80,6 @@ def _resolve_eval_cfg(cfg: DictConfig, ex_id: str) -> EvalLanguageModelsConfig:
     )
 
 
-def _load_language_tokens(
-    lang: str,
-    tokenized_dir: str,
-    target_num_tokens: int,
-) -> torch.Tensor:
-    return load_token_ids(
-        lang=lang,
-        tokenized_dir=tokenized_dir,
-        target_num_tokens=target_num_tokens,
-        missing_hint="Run 1_tokenize.py first or set evaluate_language_specific_models.tokenized_dir.",
-    )
-
-
 def _discover_generated_model_dirs(
     generated_models_dir: str,
     preferred_order: list[str],
@@ -130,7 +117,12 @@ def main(cfg: DictConfig):
     print(f"Preparing tokenized evaluation data from: {eval_cfg.tokenized_dir}")
     eval_tokens: dict[str, torch.Tensor] = {}
     for lang in col_languages:
-        eval_tokens[lang] = _load_language_tokens(lang, eval_cfg.tokenized_dir, eval_cfg.target_num_tokens)
+        eval_tokens[lang] = load_token_ids(
+            lang=lang,
+            tokenized_dir=eval_cfg.tokenized_dir,
+            target_num_tokens=eval_cfg.target_num_tokens,
+            missing_hint="Run 1_tokenize.py first or set evaluate_language_specific_models.tokenized_dir.",
+        )
         print(f"Loaded {lang}: {eval_tokens[lang].numel()} tokens")
 
     print("Computing baseline perplexity (before ablation)...")
