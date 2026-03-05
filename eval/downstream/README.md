@@ -1,6 +1,6 @@
 ## Setup
 ```bash
-pip install git+https://github.com/huggingface/lighteval.git
+pip install pillow git+https://github.com/huggingface/lighteval.git
 ```
 
 
@@ -16,9 +16,7 @@ pip install git+https://github.com/huggingface/lighteval.git
 ## How to run
 
 > You can use command builder `lighteval_cmd_builder.py`, just change the parameters and use the names from the table. Don't forget to copy with the "*" (asterisk)
----
-
-> Run from `...evaluate/lighteval/` 
+--- 
 
 ```bash
 lighteval accelerate \
@@ -46,6 +44,13 @@ If OOM happens, sometimes exporting this helps:
 ```bash
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
+If OOM persist but auto-selected batch size is still too high, add batch_size argument to model_name:
+```bash
+lighteval accelerate \
+	"model_name=<hf-path or local absolute path>,batch_size=8" \
+	"<task name|number of shots>,<another task name|number of shots>" \
+	--custom-tasks <path/to/the/file>
+```
 ### Examples
 
 > Run from `...evaluate/lighteval/` 
@@ -54,7 +59,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 lighteval accelerate \
 	"model_name=Qwen/Qwen2.5-0.5B-Instruct" \
 	"squad_3_2_filtered_rc|0" \
-	--custom-tasks community_tasks/benczechmark.py \
+	--custom-tasks community_tasks/cze_benczechmark.py \
 	--max-samples 100
 ```
 You can also run **multiple tasks** at once:
@@ -62,7 +67,7 @@ You can also run **multiple tasks** at once:
 lighteval accelerate \
 	"model_name=Qwen/Qwen2.5-0.5B-Instruct" \
 	"squad_3_2_filtered_rc|0,propaganda_argumentace_nli|0" \
-	--custom-tasks community_tasks/benczechmark.py \
+	--custom-tasks community_tasks/cze_benczechmark.py \
 	--max-samples 100
 ```
 Run using **nohup**:
@@ -70,7 +75,7 @@ Run using **nohup**:
 nohup lighteval accelerate \
 	"model_name=Qwen/Qwen2.5-0.5B-Instruct" \
 	"squad_3_2_filtered_rc|0" \
-	--custom-tasks community_tasks/benczechmark.py
+	--custom-tasks community_tasks/cze_benczechmark.py
   > lighteval.log 2>&1 &
 ```
 How to run tasks marked with "\*" :
@@ -78,7 +83,7 @@ How to run tasks marked with "\*" :
 lighteval accelerate \
     "model_name=Qwen/Qwen2.5-0.5B-Instruct,generation_parameters={\"temperature\":0.7}" \
     "propaganda_emoce_nli|0" \
-    --custom-tasks community_tasks/benczechmark.py
+    --custom-tasks community_tasks/cze_benczechmark.py
 ```
 
 

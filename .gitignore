@@ -10,6 +10,7 @@ results/*
 .DS_Store
 .vscode/
 
+eval/perplexity
 eval/perplexity/outputs/
 eval/perplexity/results/
 *.log
