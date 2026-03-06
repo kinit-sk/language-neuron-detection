@@ -77,10 +77,12 @@ def _resolve_activation_thresholds(cfg: DictConfig) -> tuple[float, float]:
 def _accumulate_act_grad(
     stats: dict[str, torch.Tensor], layer_idx: int, act: torch.Tensor, grad: torch.Tensor, threshold: float
 ):
-    act_clean = _safe_float_tensor(act.detach())
-    metric = (act_clean * _safe_float_tensor(grad)).abs()
     with torch.no_grad():
-        stats["sums"][layer_idx] += metric.sum(dim=(0, 1)).cpu()
+        # Keep the large intermediate in model dtype (typically fp16) to reduce GPU memory.
+        metric = (act.detach() * grad.detach()).abs()
+        if not torch.isfinite(metric).all():
+            metric = torch.nan_to_num(metric, nan=0.0, posinf=0.0, neginf=0.0)
+        stats["sums"][layer_idx] += metric.sum(dim=(0, 1), dtype=torch.float32).cpu()
         stats["over_threshold"][layer_idx] += (metric > threshold).sum(dim=(0, 1)).cpu()
         stats["counts"][layer_idx] += metric.size(0) * metric.size(1)
 
@@ -102,8 +104,10 @@ def _record_mlp(
     mlp_variant: str,
 ):
     if recording_strategy == "grad_act":
+        act_detached = tracked.detach()
+
         def grad_hook_fn(grad):
-            _accumulate_act_grad(stats, layer_idx, tracked, grad, threshold)
+            _accumulate_act_grad(stats, layer_idx, act_detached, grad, threshold)
 
         tracked.register_hook(grad_hook_fn)
         return
@@ -135,8 +139,10 @@ def _record_attn(
     threshold: float,
 ):
     if recording_strategy == "grad_act":
+        act_detached = output.detach()
+
         def grad_hook_fn(grad):
-            _accumulate_act_grad(stats, layer_idx, output, grad, threshold)
+            _accumulate_act_grad(stats, layer_idx, act_detached, grad, threshold)
 
         output.register_hook(grad_hook_fn)
         return
@@ -329,6 +335,14 @@ def main(cfg: DictConfig):
     if not include_mlp and not include_attn:
         raise ValueError("record_activations.components must include at least one of: 'mlp', 'attn'")
     mlp_variant = _resolve_mlp_variant(cfg) if include_mlp else None
+    if recording_strategy == "grad_act":
+        # We only need activation gradients, not parameter gradients.
+        # Freezing parameters substantially reduces backward memory.
+        model.requires_grad_(False)
+        model.gradient_checkpointing_enable()
+        if hasattr(model.config, "use_cache"):
+            model.config.use_cache = False
+        print("Using grad_act with frozen model parameters (activation gradients only).")
     num_layers = len(model.model.layers)
     intermediate_size = model.model.layers[0].mlp.gate_proj.out_features if include_mlp else None
     q_size = model.model.layers[0].self_attn.q_proj.out_features if include_attn else None
@@ -375,13 +389,15 @@ def main(cfg: DictConfig):
 
             if recording_strategy == "grad_act":
                 model.zero_grad(set_to_none=True)
-                outputs = model(batch, use_cache=False)
-                logits = outputs.logits.float()
+                input_embeds = model.get_input_embeddings()(batch).detach().requires_grad_(True)
+                outputs = model(inputs_embeds=input_embeds, use_cache=False)
                 target = batch[:, 1:]
-                pred = logits[:, :-1, :]
-                token_logprobs = F.log_softmax(pred, dim=-1).gather(-1, target.unsqueeze(-1)).squeeze(-1)
+                pred = outputs.logits[:, :-1, :]
+                selected_logits = pred.gather(-1, target.unsqueeze(-1)).squeeze(-1)
+                token_logprobs = selected_logits - torch.logsumexp(pred, dim=-1)
                 scalar_objective = token_logprobs.mean()
                 scalar_objective.backward()
+                del input_embeds, outputs, target, pred, selected_logits, token_logprobs, scalar_objective
             else:
                 with torch.no_grad():
                     model(batch, use_cache=False)
