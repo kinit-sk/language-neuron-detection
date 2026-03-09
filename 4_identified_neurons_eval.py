@@ -5,7 +5,7 @@ from typing import Any
 
 import hydra
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from transformers import AutoModelForCausalLM
 
 from eval_utils import (
@@ -290,6 +290,7 @@ def main(cfg: DictConfig):
 
     save_dir = os.path.join(eval_cfg.save_dir, ex_id)
     os.makedirs(save_dir, exist_ok=True)
+    OmegaConf.save(cfg, os.path.join(save_dir, "used_config.yaml"), resolve=True)
 
     csv_path = os.path.join(save_dir, "log_ppx_ratio_matrix.csv")
     save_matrix_csv(csv_path, row_languages, col_languages, matrix)
@@ -313,7 +314,7 @@ def main(cfg: DictConfig):
     }
 
     pt_path = os.path.join(save_dir, "log_ppx_ratio_matrix.pt")
-    torch.save(result_payload, pt_path)
+    # torch.save(result_payload, pt_path)
     print(f"Saved matrix CSV to {csv_path}")
     print(f"Saved heatmap PNG to {png_path}")
     print(f"Saved matrix artifact to {pt_path}")
