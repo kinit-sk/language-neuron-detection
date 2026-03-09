@@ -264,6 +264,18 @@ def _compute_over_threshold_rate(stats: dict[str, torch.Tensor]) -> torch.Tensor
     )
 
 
+def _log_layerwise_component_stats(component_name: str, avg_tensor: torch.Tensor, over_threshold_rate_tensor: torch.Tensor):
+    avg_by_layer = avg_tensor.mean(dim=1)
+    over_threshold_rate_by_layer = over_threshold_rate_tensor.mean(dim=1)
+    print(f"\n{component_name} layerwise stats:")
+    for layer_idx in range(avg_by_layer.size(0)):
+        print(
+            f"  layer {layer_idx}: "
+            f"over_threshold_rate_avg={over_threshold_rate_by_layer[layer_idx].item():.6f}, "
+            f"attn_grad_average_activations_avg={avg_by_layer[layer_idx].item():.6f}"
+        )
+
+
 def save_activations(
     mlp_grad_stats: dict[str, torch.Tensor] | None,
     attn_grad_stats: dict[str, dict[str, torch.Tensor]] | None,
@@ -286,23 +298,29 @@ def save_activations(
     if include_mlp:
         if mlp_grad_stats is None:
             raise ValueError("MLP stats are required when include_mlp=True")
-        output["mlp_grad_average_activations"] = _compute_average(mlp_grad_stats).to("cpu")
-        output["mlp_over_threshold_rate"] = _compute_over_threshold_rate(mlp_grad_stats).to("cpu")
+        mlp_grad_average_activations = _compute_average(mlp_grad_stats).to("cpu")
+        mlp_over_threshold_rate = _compute_over_threshold_rate(mlp_grad_stats).to("cpu")
+        output["mlp_grad_average_activations"] = mlp_grad_average_activations
+        output["mlp_over_threshold_rate"] = mlp_over_threshold_rate
+        _log_layerwise_component_stats("mlp", mlp_grad_average_activations, mlp_over_threshold_rate)
     if include_attn:
         if attn_grad_stats is None:
             raise ValueError("Attention stats are required when include_attn=True")
         attn_grad_average = {
-            "q_proj_average": _compute_average(attn_grad_stats["q_proj"]),
-            "k_proj_average": _compute_average(attn_grad_stats["k_proj"]),
-            "v_proj_average": _compute_average(attn_grad_stats["v_proj"]),
+            "q_proj_average": _compute_average(attn_grad_stats["q_proj"]).to("cpu"),
+            "k_proj_average": _compute_average(attn_grad_stats["k_proj"]).to("cpu"),
+            "v_proj_average": _compute_average(attn_grad_stats["v_proj"]).to("cpu"),
         }
         attn_over_threshold_rate = {
-            "q_proj_rate": _compute_over_threshold_rate(attn_grad_stats["q_proj"]),
-            "k_proj_rate": _compute_over_threshold_rate(attn_grad_stats["k_proj"]),
-            "v_proj_rate": _compute_over_threshold_rate(attn_grad_stats["v_proj"]),
+            "q_proj_rate": _compute_over_threshold_rate(attn_grad_stats["q_proj"]).to("cpu"),
+            "k_proj_rate": _compute_over_threshold_rate(attn_grad_stats["k_proj"]).to("cpu"),
+            "v_proj_rate": _compute_over_threshold_rate(attn_grad_stats["v_proj"]).to("cpu"),
         }
-        output["attn_grad_average_activations"] = {k: v.to("cpu") for k, v in attn_grad_average.items()}
-        output["attn_over_threshold_rate"] = {k: v.to("cpu") for k, v in attn_over_threshold_rate.items()}
+        output["attn_grad_average_activations"] = attn_grad_average
+        output["attn_over_threshold_rate"] = attn_over_threshold_rate
+        _log_layerwise_component_stats("q", attn_grad_average["q_proj_average"], attn_over_threshold_rate["q_proj_rate"])
+        _log_layerwise_component_stats("k", attn_grad_average["k_proj_average"], attn_over_threshold_rate["k_proj_rate"])
+        _log_layerwise_component_stats("v", attn_grad_average["v_proj_average"], attn_over_threshold_rate["v_proj_rate"])
 
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"{lang}_{recording_strategy}.pt")
