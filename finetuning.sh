@@ -40,5 +40,5 @@ echo "MLflow server running at ${MLFLOW_TRACKING_URI} (PID=$MLFLOW_PID) logs in 
 # Finetuning entrypoint
 # See: 
 #   1) configs/example.yaml for finetuning configs
-#   2) finetuing_impl/example.yaml for finetuing implementation
+#   2) finetuing_impl/example.py for finetuing implementation
 python -m runexp -cn example.yaml "run_args.tracker.tracking_uri=${MLFLOW_TRACKING_URI}"
