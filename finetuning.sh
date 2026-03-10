@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
-MLFLOW_PORT=5001
+MLFLOW_PORT=5002
 MLFLOW_BACKEND_URI="sqlite:///mlruns/mlruns.db"
 MLFLOW_ARTIFACT_ROOT="file:mlruns"
+MLFLOW_TRACKING_URI="http://127.0.0.1:${MLFLOW_PORT}"
+
+
+export HYDRA_FULL_ERROR=1
 
 cleanup() {
   echo "Stopping MLflow server..."
@@ -29,7 +33,7 @@ until curl -s "http://127.0.0.1:$MLFLOW_PORT" >/dev/null; do
   sleep 0.5
 done
 
-echo "MLflow server running (PID=$MLFLOW_PID) logs in /tmp/mlflow.log"
+echo "MLflow server running at ${MLFLOW_TRACKING_URI} (PID=$MLFLOW_PID) logs in /tmp/mlflow.log"
 
 
 
@@ -37,4 +41,4 @@ echo "MLflow server running (PID=$MLFLOW_PID) logs in /tmp/mlflow.log"
 # See: 
 #   1) configs/example.yaml for finetuning configs
 #   2) finetuing_impl/example.yaml for finetuing implementation
-python -m runexp -cn example.yaml
+python -m runexp -cn example.yaml "run_args.tracker.tracking_uri=${MLFLOW_TRACKING_URI}"
