@@ -38,8 +38,8 @@ args:
   eval_batch_size: 2
   learning_rate: 2e-5
   epochs: 1
-  eval_every_steps: 100
-  save_steps: 100
+  eval_every_steps: 1000
+  save_steps: 1000
   logging_steps: 10
   weight_decay: 0.0
   selected_neurons_path: "data/3_output/20-languages-latn/lape_selected_neurons.pt"

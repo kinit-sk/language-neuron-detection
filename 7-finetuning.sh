@@ -7,8 +7,6 @@ MLFLOW_BACKEND_URI="${MLFLOW_BACKEND_URI:-sqlite:///mlruns/mlruns.db}"
 MLFLOW_ARTIFACT_ROOT="${MLFLOW_ARTIFACT_ROOT:-file:mlruns}"
 MLFLOW_TRACKING_URI="http://127.0.0.1:${MLFLOW_PORT}"
 
-export HYDRA_FULL_ERROR=1
-
 cleanup() {
   echo "Stopping MLflow server..."
   if [[ -n "${MLFLOW_PID:-}" ]]; then
