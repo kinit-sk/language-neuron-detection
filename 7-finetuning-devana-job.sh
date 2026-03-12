@@ -9,20 +9,25 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
-
-
 set -euo pipefail
+eval "$(conda shell.bash hook)"
+conda activate language-neuron-detection 
 
 EXPERIMENT_CONFIG="7_finetuning_latn.yaml"
 MLFLOW_PORT="${MLFLOW_PORT:-5002}"
 MLFLOW_BACKEND_URI="${MLFLOW_BACKEND_URI:-sqlite:///mlruns/mlruns.db}"
 MLFLOW_ARTIFACT_ROOT="${MLFLOW_ARTIFACT_ROOT:-file:mlruns}"
 MLFLOW_TRACKING_URI="http://127.0.0.1:${MLFLOW_PORT}"
-MLFLOW_LOG_PATH="${MLFLOW_LOG_PATH:-/tmp/mlflow-${SLURM_JOB_ID:-$$}.log}"
+JOB_LOG_DIR="${JOB_LOG_DIR:-logs/7_finetuning_latn}"
+mkdir -p "${JOB_LOG_DIR}"
+MLFLOW_LOG_PATH="${MLFLOW_LOG_PATH:-${JOB_LOG_DIR}/mlflow-${SLURM_JOB_ID:-$$}.log}"
 MLFLOW_STARTUP_TIMEOUT="${MLFLOW_STARTUP_TIMEOUT:-60}"
 
 cleanup() {
   echo "Stopping MLflow server..."
+  if [[ -n "${MLFLOW_TAIL_PID:-}" ]]; then
+    kill "$MLFLOW_TAIL_PID" 2>/dev/null || true
+  fi
   if [[ -n "${MLFLOW_PID:-}" ]]; then
     kill "$MLFLOW_PID" 2>/dev/null || true
   fi
@@ -84,10 +89,12 @@ mlflow server \
   >"${MLFLOW_LOG_PATH}" 2>&1 &
 
 MLFLOW_PID=$!
+tail -n +1 -f "${MLFLOW_LOG_PATH}" &
+MLFLOW_TAIL_PID=$!
 
 wait_for_mlflow
 
-echo "MLflow server running at ${MLFLOW_TRACKING_URI} (PID=${MLFLOW_PID}) logs in ${MLFLOW_LOG_PATH}"
+echo "MLflow server running at ${MLFLOW_TRACKING_URI} on $(hostname) (PID=${MLFLOW_PID}) logs in ${MLFLOW_LOG_PATH}"
 echo "Launching runexp config: ${EXPERIMENT_CONFIG}"
 
 

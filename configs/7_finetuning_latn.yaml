@@ -19,7 +19,7 @@ run_args:
     project_name: ${run_args.project_name}
     experiment_name: ${run_args.experiment_name}
     description: ${run_args.description}
-    tracking_uri: 'http://localhost:5001' # sqlite:///mlruns/mlruns.db
+    tracking_uri: 'http://localhost:5002' # sqlite:///mlruns/mlruns.db
 
 
 
@@ -30,12 +30,12 @@ args:
   dataset_path: "HuggingFaceFW/fineweb-2"
   dataset_language: "ces_Latn"
   dataset_split: "train"
-  num_train_examples: 60000
+  num_train_examples: 240000
   num_val_examples: 1000
   max_length: 2048
-  batch_size: 2
-  grad_accum: 4
-  eval_batch_size: 2
+  batch_size: 4
+  grad_accum: 2
+  eval_batch_size: 4
   learning_rate: 2e-5
   epochs: 1
   eval_every_steps: 1000
