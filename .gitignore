@@ -5,6 +5,7 @@ mlruns/*
 prompts/*
 outputs/*
 results/*
+logs/*
 
 # Track only the shared template config
 configs/**/*.yaml
