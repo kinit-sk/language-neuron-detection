@@ -1,5 +1,8 @@
 ## Setup
 ```bash
+conda create -n lighteval python=3.10
+```
+```bash
 pip install pillow git+https://github.com/huggingface/lighteval.git
 ```
 
