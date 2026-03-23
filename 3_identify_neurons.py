@@ -281,7 +281,7 @@ def main(cfg: DictConfig):
     record_cfg = get_pipeline_step(cfg, "step2_record_activations")
     identify_cfg = get_pipeline_step(cfg, "step3_identify_neurons")
 
-    use_activations_from_step_2 = record_cfg.get("use_activations_from_step_2", True)
+    use_activations_from_step_2 = identify_cfg.get("use_activations_from_step_2", True)
 
     load_dir = os.path.join(record_cfg.save_dir, ex_id)
     if not os.path.isdir(load_dir):
@@ -311,6 +311,7 @@ def main(cfg: DictConfig):
     aggregate_total_neurons_per_lang = 0
     for key, stacked in stacked_by_key.items():
         if use_activations_from_step_2:
+            print("Using activations from step 2")
             lape = _lape_select(
                 stacked=stacked,
                 top_rate=top_rate,
@@ -318,6 +319,7 @@ def main(cfg: DictConfig):
                 activation_bar_ratio=activation_bar_ratio,
             )
         else:
+            print("Selecting neurons randomly")
             lape = _random_select_from_most_active(
                 stacked=stacked,
                 top_rate=top_rate,
