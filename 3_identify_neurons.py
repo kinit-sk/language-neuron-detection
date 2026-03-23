@@ -161,6 +161,63 @@ def _lape_select(
     }
 
 
+
+def _random_select_from_most_active(
+    stacked: torch.Tensor,
+    top_rate: float,
+    filter_rate: float,
+    activation_bar_ratio: float,
+) -> dict[str, torch.Tensor]:
+    n_lang, n_layers, width = stacked.shape
+    activation_probs = stacked.permute(1, 2, 0).contiguous()  # layer x hidden x lang
+
+    flattened_probs = activation_probs.flatten()
+    top_prob_k = round(len(flattened_probs) * filter_rate)
+    top_prob_value = flattened_probs.kthvalue(top_prob_k).values.item()
+    candidate_mask = (activation_probs > top_prob_value).any(dim=-1)
+    candidate_indices = torch.nonzero(candidate_mask, as_tuple=False)
+
+    if candidate_indices.numel() == 0:
+        empty_scores = activation_probs.new_zeros((0, n_lang))
+        empty_valid = torch.zeros((n_lang, 0), dtype=torch.bool)
+        empty_mask = torch.zeros((n_lang, n_layers, width), dtype=torch.bool)
+        return {
+            "selected_mask": empty_mask,
+            "top_indices": candidate_indices,
+            "top_scores": empty_scores,
+            "top_valid": empty_valid,
+            "counts_per_lang_layer": empty_mask.sum(dim=2),
+        }
+
+    n_selected = min(round((n_layers * width) * top_rate), candidate_indices.size(0))
+    perm = torch.randperm(candidate_indices.size(0))[:n_selected]
+    merged_index = candidate_indices[perm]
+    row_index = merged_index[:, 0]
+    col_index = merged_index[:, 1]
+    selected_probs = activation_probs[row_index, col_index]  # n_selected x lang
+
+    selected_probs_by_lang = selected_probs.transpose(0, 1)  # lang x n_selected
+    activation_bar_k = round(len(flattened_probs) * activation_bar_ratio)
+    activation_bar = flattened_probs.kthvalue(activation_bar_k).values.item()
+    lang, indice = torch.where(selected_probs_by_lang > activation_bar)
+
+    selected_mask = torch.zeros((n_lang, n_layers, width), dtype=torch.bool)
+    counts_by_lang = torch.bincount(lang, minlength=n_lang)
+    for lang_idx, split_idx in enumerate(indice.split(counts_by_lang.tolist())):
+        if split_idx.numel() == 0:
+            continue
+        lang_index = merged_index[split_idx]
+        selected_mask[lang_idx, lang_index[:, 0], lang_index[:, 1]] = True
+
+    return {
+        "selected_mask": selected_mask,
+        "top_indices": merged_index,
+        "top_scores": selected_probs,
+        "top_valid": selected_probs_by_lang > activation_bar,
+        "counts_per_lang_layer": selected_mask.sum(dim=2),
+    }
+
+
 def _build_serializable_index_lists(selected_mask: torch.Tensor, languages: list[str]) -> dict[str, list[list[int]]]:
     out: dict[str, list[list[int]]] = {}
     for lang_idx, lang in enumerate(languages):
@@ -223,6 +280,9 @@ def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
     record_cfg = get_pipeline_step(cfg, "step2_record_activations")
     identify_cfg = get_pipeline_step(cfg, "step3_identify_neurons")
+
+    use_activations_from_step_2 = record_cfg.get("use_activations_from_step_2", True)
+
     load_dir = os.path.join(record_cfg.save_dir, ex_id)
     if not os.path.isdir(load_dir):
         raise FileNotFoundError(f"Activation directory not found: {load_dir}")
@@ -250,12 +310,20 @@ def main(cfg: DictConfig):
     aggregate_counts_per_lang = torch.zeros(len(languages), dtype=torch.long)
     aggregate_total_neurons_per_lang = 0
     for key, stacked in stacked_by_key.items():
-        lape = _lape_select(
-            stacked=stacked,
-            top_rate=top_rate,
-            filter_rate=filter_rate,
-            activation_bar_ratio=activation_bar_ratio,
-        )
+        if use_activations_from_step_2:
+            lape = _lape_select(
+                stacked=stacked,
+                top_rate=top_rate,
+                filter_rate=filter_rate,
+                activation_bar_ratio=activation_bar_ratio,
+            )
+        else:
+            lape = _random_select_from_most_active(
+                stacked=stacked,
+                top_rate=top_rate,
+                filter_rate=filter_rate,
+                activation_bar_ratio=activation_bar_ratio,
+            )
         results[key] = {
             "selected_mask": lape["selected_mask"],
             "counts_per_lang_layer": lape["counts_per_lang_layer"],
