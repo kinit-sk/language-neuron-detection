@@ -238,6 +238,12 @@ def load_masked_model(
     )
     model.config.use_cache = False
 
+    if selected_neurons_path == "":
+        print("No selected neuron artifact provided, finetuning whole model.")
+        for param in model.parameters():
+            param.requires_grad_(True)
+        return model
+
     print(f"Loading selected neuron artifact: {selected_neurons_path}")
     selected = _load_selected_neurons(selected_neurons_path)
     union_by_component = _build_union_indices_by_component(
