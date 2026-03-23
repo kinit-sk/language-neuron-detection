@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=p904-24-3
 #SBATCH --mail-user=<jakub.kopal@kinit.sk>
-#SBATCH --time=09:00:00 # Estimate to increase job priority
+#SBATCH --time=80:00:00 # Estimate to increase job priority
 
 ## Nodes allocation
 #SBATCH --partition=gpu
@@ -13,12 +13,16 @@ set -euo pipefail
 eval "$(conda shell.bash hook)"
 conda activate language-neuron-detection 
 
-EXPERIMENT_CONFIG="7_finetuning_latn.yaml"
+EXPERIMENT_CONFIG="${CONFIG_NAME}.yaml"
 MLFLOW_PORT="${MLFLOW_PORT:-5002}"
 MLFLOW_BACKEND_URI="${MLFLOW_BACKEND_URI:-sqlite:///mlruns/mlruns.db}"
 MLFLOW_ARTIFACT_ROOT="${MLFLOW_ARTIFACT_ROOT:-file:mlruns}"
 MLFLOW_TRACKING_URI="http://127.0.0.1:${MLFLOW_PORT}"
-JOB_LOG_DIR="${JOB_LOG_DIR:-logs/7_finetuning_latn}"
+JOB_LOG_DIR="${JOB_LOG_DIR:-logs/${CONFIG_NAME}}"
+
+
+
+
 mkdir -p "${JOB_LOG_DIR}"
 MLFLOW_LOG_PATH="${MLFLOW_LOG_PATH:-${JOB_LOG_DIR}/mlflow-${SLURM_JOB_ID:-$$}.log}"
 MLFLOW_STARTUP_TIMEOUT="${MLFLOW_STARTUP_TIMEOUT:-60}"
