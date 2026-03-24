@@ -12,7 +12,7 @@ build_order:
 run_args:
   project_name: language_neuron_detection
   experiment_class: ${method:finetuning_impl.7_finetuning.Experiment}
-  experiment_name: czech-finetuing-20-latn
+  experiment_name: czech-finetuing-20-non-latn
   description: Czech FineWeb next-token training with non-English language-neuron updates only
   tracker:
     _target_: runexp.MLFlowTracker
@@ -24,7 +24,7 @@ run_args:
 
 
 args:
-  output_dir: "data/7_finetuning/latn"
+  output_dir: "data/7_finetuning/non-latn"
   model: "meta-llama/Llama-3.2-3B-instruct"
   dtype: ${object:torch.bfloat16}
   dataset_path: "HuggingFaceFW/fineweb-2"
@@ -42,7 +42,7 @@ args:
   save_steps: 120000
   logging_steps: 10
   weight_decay: 0.0
-  selected_neurons_path: "data/3_output/20-languages-latn/lape_selected_neurons.pt"
+  selected_neurons_path: "data/3_output/20-languages-non-latn/lape_selected_neurons.pt"
   train_languages: null
   exclude_languages:
     - "en_Latn"

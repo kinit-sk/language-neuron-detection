@@ -1,11 +1,29 @@
 import json
+import os
 import matplotlib.pyplot as plt
 
-origin_path = "/home/kopal/language-neuron-detection/results/results/meta-llama/Llama-3.2-3B-instruct/results_2026-03-18T15-21-06.118091.json"
-latn_path = "/home/kopal/language-neuron-detection/results/results/home/kopal/language-neuron-detection/data/7_finetuning/latn/checkpoint-25000/results_2026-03-19T10-32-38.903308.json"
-non_latn_path = "/home/kopal/language-neuron-detection/results/results/home/kopal/language-neuron-detection/data/7_finetuning/non-latn/checkpoint-21000/results_2026-03-19T11-45-22.317912.json"
 
-col_labels = ["Llama-3.2-3B-instruct", "LATN", "NON-LATN"]
+
+
+names = []
+results_root = "/home/kopal/language-neuron-detection/eval/downstream/results"
+for root, dirs, files in os.walk(results_root):
+    for file in files:
+        full_path = os.path.join(root, file)
+        split = full_path.split("/")
+        print(full_path)
+        name = split[[i for i, s in enumerate(split) if s in ('7_finetuning', 'meta-llama')][0] + 1]
+        names.append((name, full_path))
+
+
+
+
+# origin_path = "/home/kopal/language-neuron-detection/results/results/meta-llama/Llama-3.2-3B-instruct/results_2026-03-18T15-21-06.118091.json"
+# latn_path = "/home/kopal/language-neuron-detection/results/results/home/kopal/language-neuron-detection/data/7_finetuning/latn/checkpoint-25000/results_2026-03-19T10-32-38.903308.json"
+# non_latn_path = "/home/kopal/language-neuron-detection/results/results/home/kopal/language-neuron-detection/data/7_finetuning/non-latn/checkpoint-21000/results_2026-03-19T11-45-22.317912.json"
+
+# col_labels = ["Llama-3.2-3B-instruct", "LATN", "NON-LATN"]
+col_labels = [n for n, _ in names]
 
 def process(path: str):
     with open(path, "r") as f:
@@ -26,17 +44,11 @@ def process(path: str):
 
 data, data_std = [], []
 
-row_keys, values, values_std = process(origin_path)
-data.append(values)
-data_std.append(values_std)
 
-row_keys, values, values_std = process(latn_path)
-data.append(values)
-data_std.append(values_std)
-
-row_keys, values, values_std = process(non_latn_path)
-data.append(values)
-data_std.append(values_std)
+for name, path in names:
+    row_keys, values, values_std = process(path)
+    data.append(values)
+    data_std.append(values_std)
 
 
 cell_text = [
@@ -50,10 +62,13 @@ data = list(zip(*cell_text))
 
 
 # Create figure
-fig, ax = plt.subplots()
+fig_width = max(12, len(col_labels) * 3)
+fig_height = max(6, len(data) * 0.45)
+fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 ax.axis('off')  # hide axes
 # Create table
 table = ax.table(cellText=data, rowLabels=row_keys, colLabels=col_labels, loc='left')
+table.auto_set_column_width(col=list(range(len(col_labels))))
 
 # Optional styling
 table.auto_set_font_size(False)
