@@ -5,6 +5,8 @@ mlruns/*
 prompts/*
 outputs/*
 results/*
+results_old/*
+eval/downstream/results/*
 logs/*
 
 # Track only the shared template config

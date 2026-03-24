@@ -39,7 +39,7 @@ args:
   learning_rate: 2e-4
   epochs: 1
   eval_every_steps: 1000
-  save_steps: 240000
+  save_steps: 120000
   logging_steps: 10
   weight_decay: 0.0
   selected_neurons_path: ""
