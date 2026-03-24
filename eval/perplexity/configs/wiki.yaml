@@ -1,0 +1,26 @@
+model:
+  path: "meta-llama/Llama-3.2-1B"
+  tokenizer_path: "meta-llama/Llama-3.2-1B"
+
+evaluation:
+  dataset_hf_path: "google/wiki40b"
+  max_length: 512
+  stride: 256
+  save_path: "results"
+  streaming: true
+
+use_fix_serialized_bytes: true
+datasets:
+  eng_Latn:
+    path: ${evaluation.dataset_hf_path}
+    subset_name: "en" # "" for datasets without subsets
+    split: "validation"
+    text_field: "text"
+    max_samples: 1000 # None for full dataset
+    
+  slk_Latn:
+    path: ${evaluation.dataset_hf_path}
+    subset_name: "sk" # "" for datasets without subsets
+    split: "validation"
+    text_field: "text"
+    max_samples: 1000 # None for full dataset
