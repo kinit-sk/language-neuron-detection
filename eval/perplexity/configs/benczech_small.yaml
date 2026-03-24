@@ -1,0 +1,19 @@
+model:
+  path: "meta-llama/Llama-3.2-1B"
+  tokenizer_path: "meta-llama/Llama-3.2-1B"
+
+evaluation:
+  dataset_hf_path: "CZLC/CNC_fictree"
+  max_length: 512
+  stride: 256
+  save_path: "results"
+  streaming: true
+
+use_fix_serialized_bytes: false
+datasets:
+  cze_Latn:
+    path: ${evaluation.dataset_hf_path}
+    subset_name: "" # "" for datasets without subsets
+    split: "test"
+    text_field: "text"
+    max_samples: 100 # None for full dataset
