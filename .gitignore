@@ -12,8 +12,11 @@ configs/**/*.yaml
 configs/**/*.yml
 !configs/default.yaml
 !configs/example.yaml
-!configs/7_finetuning_latn.yaml
-!configs/7_finetuning_no_latn.yaml
+!configs/7_finetuning_*
+
+
+results_old/*
+eval/downstream/results/*
 
  
 .python-version
