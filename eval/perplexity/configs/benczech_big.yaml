@@ -16,4 +16,4 @@ datasets:
     subset_name: "" # "" for datasets without subsets
     split: "test"
     text_field: "text"
-    max_samples: 100 # None for full dataset
+    max_samples: 999999999999999999 # None for full dataset
