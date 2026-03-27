@@ -1,72 +1,48 @@
 import json
 from pathlib import Path
 
-import matplotlib.pyplot as plt
+METRICS = ("loss", "perplexity")
 
 
-def iter_rows(results_dir: Path):
-    for json_path in sorted(results_dir.glob("*.json")):
-        payload = json.loads(json_path.read_text())
-        metrics = payload.get("metrics", {}).get("cze_Latn")
-        if not metrics:
-            continue
-
-        yield {
-            "model": payload.get("model_name", json_path.stem),
-            "loss": metrics["loss"],
-            "perplexity": metrics["perplexity"],
-        }
+def format_row(values, widths):
+    return "| " + " | ".join(value.ljust(width) for value, width in zip(values, widths)) + " |"
 
 
 def main():
-    results_dir = Path(__file__).resolve().parent / "results"
-    rows = list(iter_rows(results_dir))
+    results_dir = Path(__file__).resolve().parent / "results-wiki-5k"
+    rows = []
+    languages = set()
+
+    for json_path in sorted(results_dir.glob("*.json")):
+        payload = json.loads(json_path.read_text())
+        metrics_by_lang = payload.get("metrics") or {}
+        if not metrics_by_lang:
+            continue
+
+        row = {"model": payload.get("model_name", json_path.stem)}
+        for lang, metrics in metrics_by_lang.items():
+            languages.add(lang)
+            for metric_name in METRICS:
+                row[f"{lang}_{metric_name}"] = metrics[metric_name]
+        rows.append(row)
 
     if not rows:
         print("No result JSON files found.")
         return
 
-    headers = ("model", "loss", "perplexity")
-    formatted_rows = [
-        (row["model"], f"{row['loss']:.6f}", f"{row['perplexity']:.6f}")
-        for row in rows
+    headers = ["metric", *[row["model"] for row in rows]]
+    import code; code.interact(local=dict(globals(), **locals()))
+    table = [
+        [f"{lang}_{metric_name}", *(f"{row.get(f'{lang}_{metric_name}', float('nan')):.6f}" for row in rows)]
+        for lang in sorted(languages)
+        for metric_name in METRICS
     ]
-    widths = [
-        max(len(header), *(len(row[idx]) for row in formatted_rows))
-        for idx, header in enumerate(headers)
-    ]
+    widths = [max(len(headers[i]), *(len(line[i]) for line in table)) for i in range(len(headers))]
 
-    def format_row(values):
-        return "| " + " | ".join(value.ljust(width) for value, width in zip(values, widths)) + " |"
-
-    output_path = Path(__file__).resolve().parent / "perplexity_table.png"
-    fig_height = max(1.5, 0.45 * (len(formatted_rows) + 1))
-    fig, ax = plt.subplots(figsize=(12, fig_height))
-    ax.axis("off")
-
-    table = ax.table(
-        cellText=formatted_rows,
-        colLabels=headers,
-        cellLoc="left",
-        loc="center",
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1, 1.3)
-
-    for (row_idx, _col_idx), cell in table.get_celld().items():
-        if row_idx == 0:
-            cell.set_text_props(weight="bold")
-
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-
-    print(format_row(headers))
+    print(format_row(headers, widths))
     print("| " + " | ".join("-" * width for width in widths) + " |")
-    for row in formatted_rows:
-        print(format_row(row))
-    print(f"Saved table image to {output_path}")
+    for line in table:
+        print(format_row(line, widths))
 
 
 if __name__ == "__main__":
