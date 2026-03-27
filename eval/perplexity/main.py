@@ -14,51 +14,17 @@ GREEN  = "\033[32m"
 RESET  = "\033[00m"
 
 
-def calculate_perplexity(model, tokenizer, dataset, text_field, max_length, stride, max_samples=None):
-    model.eval()
-    device = next(model.parameters()).device
+def get_progress_total(dataset, max_samples=None):
+    if max_samples is not None:
+        return max_samples
 
-    total_loss = 0.0
-    total_tokens = 0
+    try:
+        return len(dataset)
+    except TypeError:
+        return None
 
-    print(f"{GREEN}[INFO]{RESET} Starting perplexity calculation")
-    processed_samples = 0
-    for item in tqdm(dataset, desc=f"Streaming texts (up to {max_samples if max_samples else '∞'})"):
-        text = item[text_field].strip()
-        if not text:
-            continue
-            
-        enc = tokenizer(text, return_tensors="pt")
-        ids = enc.input_ids.to(device)
-        seq_len = ids.size(1)
 
-        prev_end = 0
-        # sliding window
-        for begin_loc in range(0, seq_len, stride):
-            end_loc = min(begin_loc + max_length, seq_len)
-            input_chunk = ids[:, begin_loc:end_loc]
-            
-            labels = input_chunk.clone()
-            labels[:, :prev_end - begin_loc] = -100  # mask old tokens
 
-            with torch.inference_mode():
-                outputs = model(input_chunk, labels=labels)
-
-            num_new_tokens = (end_loc - begin_loc) if prev_end == 0 else (end_loc - prev_end)
-            total_loss += outputs.loss.item() * num_new_tokens
-            total_tokens += num_new_tokens
-            
-            prev_end = end_loc
-            if end_loc == seq_len:
-                break
-        
-        processed_samples += 1
-        if max_samples and processed_samples >= max_samples:
-            break
-
-    avg_loss = total_loss / total_tokens
-    print(f"{GREEN}[INFO]{RESET} Perplexity calculation completed")
-    return float(torch.exp(torch.tensor(avg_loss)))
 def calculate_metrics(
     model,
     tokenizer,
@@ -79,8 +45,9 @@ def calculate_metrics(
     total_bytes = 0
 
     processed_samples = 0
+    progress_total = get_progress_total(dataset, max_samples=max_samples)
 
-    for item in tqdm(dataset, desc="Streaming texts"):
+    for item in tqdm(dataset, total=progress_total, desc="Streaming texts"):
         text = item[text_field].strip()
 
         if use_fix_serialized_bytes:
@@ -153,6 +120,8 @@ def load_model(model_path, tokenizer_path):
         tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer
+
+
 def evaluate_model(model, tokenizer, ds_cfg, max_length, stride):
     dataset = load_dataset(
         ds_cfg["path"],
