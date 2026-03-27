@@ -36,7 +36,7 @@ args:
   batch_size: 2
   grad_accum: 4
   eval_batch_size: 4
-  learning_rate: 2e-4
+  learning_rate: 2e-5
   epochs: 1
   eval_every_steps: 1000
   save_steps: 120000
