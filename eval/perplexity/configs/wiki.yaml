@@ -1,16 +1,16 @@
 model:
-  path: "/home/kopal/language-neuron-detection/data/7_finetuning/whole_model_small_lr/checkpoint-30000"
-  tokenizer_path: "/home/kopal/language-neuron-detection/data/7_finetuning/whole_model_small_lr/checkpoint-30000"
+  path: "/home/kopal/language-neuron-detection/data/7_finetuning/latn/checkpoint-30000"
+  tokenizer_path: "/home/kopal/language-neuron-detection/data/7_finetuning/latn/checkpoint-30000"
 
 evaluation:
   dataset_hf_path: "google/wiki40b"
   max_length: 512
   stride: 256
-  save_path: "results-wiki-5k"
+  save_path: "results-wiki-20k"
   streaming: true
 
 use_fix_serialized_bytes: true
-max_samples: 5000 # 1000 # null for full dataset
+max_samples: 20000 # 1000 # null for full dataset
 
 datasets:
   eng_Latn:

@@ -6,8 +6,9 @@ prompts/*
 outputs/*
 results/*
 results_old/*
-eval/downstream/results/*
+eval/downstream/results*/*
 eval/perplexity/results*
+eval/perplexity/*.png
 logs/*
 
 # Track only the shared template config
