@@ -15,7 +15,13 @@ eval_model() {
 
 eval_model_en() {
     echo -e "model_name: transformers\nmodel_parameters:\n  model_name: $1\n" > tmp_config.yaml
-    lighteval accelerate tmp_config.yaml "mmlu|0,hellaswag|0" --max-samples 2000
+
+    # OLD
+    # lighteval accelerate tmp_config.yaml "mmlu|0,hellaswag|0" --max-samples 500
+
+    # NEW
+    python misc/patch_mmlu_metric.py accelerate tmp_config.yaml "mmlu|0,hellaswag|0" --max-samples 8000
+
     rm tmp_config.yaml
 }
 
@@ -41,6 +47,8 @@ eval_model_en() {
 
 
 # ENGLISH PART
+eval_model_en "meta-llama/Llama-3.2-3B-instruct"
+
 MODEL_PATH="/home/kopal/language-neuron-detection/data/7_finetuning/latn/checkpoint-30000"
 eval_model_en ${MODEL_PATH}
 
@@ -52,5 +60,3 @@ eval_model_en ${MODEL_PATH}
 
 MODEL_PATH="/home/kopal/language-neuron-detection/data/7_finetuning/whole_model/checkpoint-30000"
 eval_model_en ${MODEL_PATH}
-
-eval_model_en "meta-llama/Llama-3.2-3B-instruct"

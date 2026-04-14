@@ -35,7 +35,7 @@ def process_file(path: str):
 if __name__ == "__main__":
     # 1) For each model get list of json files with results
     roots = [
-        "/home/kopal/language-neuron-detection/eval/downstream/results_en_tasks",
+        "/home/kopal/language-neuron-detection/eval/downstream/results_en_8k",
         "/home/kopal/language-neuron-detection/eval/downstream/results_czech_tasks",
     ]
     names = {}
