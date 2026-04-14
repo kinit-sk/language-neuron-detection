@@ -29,11 +29,11 @@ eval/downstream/results/*
 
 eval/perplexity/outputs/
 eval/perplexity/results/
+eval/dashboard_report.png
 *.log
 
 AGENTS.md
 tmp.ipynb
 
 
-run.sh
 results.png
