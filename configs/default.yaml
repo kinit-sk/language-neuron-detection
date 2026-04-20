@@ -33,6 +33,9 @@ pipeline:
     save_dir: "data/3_output"
     recorded_metric: "over_threshold_rate" # options: "grad_average_activations", "over_threshold_rate"
     top_rate: 0.01 # Select only 1% of the neurons
+    apply_english_ceiling_filter: false
+    use_margin_score: false
+    english_ceiling_ratio: 0.25
 
     filter_rate_by_strategy:
       grad_act: 0.95

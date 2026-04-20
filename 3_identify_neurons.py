@@ -7,6 +7,9 @@ from omegaconf import DictConfig, ListConfig
 
 from misc import get_pipeline_step, set_ex_id_from_config_name
 
+ENGLISH_LANGUAGE = "en_Latn"
+DEFAULT_ENGLISH_CEILING_RATIO = 0.25
+
 
 def _safe_abs(x: torch.Tensor) -> torch.Tensor:
     x = torch.nan_to_num(x.float(), nan=0.0, posinf=0.0, neginf=0.0)
@@ -101,15 +104,24 @@ def _collect_activation_tensors(
     return stacked
 
 
-def _lape_select(
-    stacked: torch.Tensor,
-    top_rate: float,
-    filter_rate: float,
-    activation_bar_ratio: float,
-) -> dict[str, torch.Tensor]:
-    n_lang, n_layers, width = stacked.shape
-    activation_probs = stacked.permute(1, 2, 0).contiguous()  # layer x hidden x lang
-    largest = False
+def _resolve_topk_count(total: int, ratio: float) -> int:
+    return max(1, min(total, round(total * ratio)))
+
+
+def _compute_candidate_mask(activation_probs: torch.Tensor, filter_rate: float) -> tuple[torch.Tensor, torch.Tensor]:
+    flattened_probs = activation_probs.flatten()
+    top_prob_k = _resolve_topk_count(len(flattened_probs), filter_rate)
+    top_prob_value = flattened_probs.kthvalue(top_prob_k).values.item()
+    candidate_mask = (activation_probs > top_prob_value).sum(dim=-1) > 0
+    return candidate_mask, flattened_probs
+
+
+def _compute_selection_score(activation_probs: torch.Tensor, use_margin_score: bool) -> tuple[torch.Tensor, bool, str]:
+    if use_margin_score:
+        topk = activation_probs.topk(k=min(2, activation_probs.size(-1)), dim=-1, largest=True).values
+        top1 = topk[..., 0]
+        top2 = topk[..., 1] if topk.size(-1) > 1 else torch.zeros_like(top1)
+        return top1 - top2, True, "margin"
 
     normed_activation_probs = activation_probs / activation_probs.sum(dim=-1, keepdim=True)
     normed_activation_probs[torch.isnan(normed_activation_probs)] = 0
@@ -119,27 +131,69 @@ def _lape_select(
         torch.zeros_like(normed_activation_probs),
     )
     entropy = -torch.sum(normed_activation_probs * log_probs, dim=-1)
-
     if torch.isnan(entropy).sum():
         raise ValueError("NaN values found in entropy")
+    return entropy, False, "entropy"
 
-    flattened_probs = activation_probs.flatten()
-    top_prob_k = round(len(flattened_probs) * filter_rate)
-    top_prob_value = flattened_probs.kthvalue(top_prob_k).values.item()
-    top_position = (activation_probs > top_prob_value).sum(dim=-1)
-    entropy[top_position == 0] = -torch.inf if largest else torch.inf
 
-    flattened_entropy = entropy.flatten()
-    top_entropy_value = round(len(flattened_entropy) * top_rate)
-    _, index = flattened_entropy.topk(top_entropy_value, largest=largest)
-    row_index = index // entropy.size(1)
-    col_index = index % entropy.size(1)
+def _apply_english_ceiling_filter(
+    top_valid: torch.Tensor,
+    selected_probs_by_lang: torch.Tensor,
+    languages: list[str],
+    english_ceiling_ratio: float,
+) -> tuple[torch.Tensor, int]:
+    if ENGLISH_LANGUAGE not in languages:
+        raise ValueError(
+            f"English ceiling filter requires '{ENGLISH_LANGUAGE}' activations to be present in cfg.main.languages"
+        )
+
+    english_idx = languages.index(ENGLISH_LANGUAGE)
+    english_scores = selected_probs_by_lang[english_idx].unsqueeze(0)
+    allowed_by_english = english_scores <= (selected_probs_by_lang * english_ceiling_ratio)
+    allowed_by_english[english_idx] = True
+
+    filtered = top_valid & allowed_by_english
+    num_filtered = int((top_valid & ~filtered).sum().item())
+    return filtered, num_filtered
+
+
+def _lape_select(
+    stacked: torch.Tensor,
+    languages: list[str],
+    top_rate: float,
+    filter_rate: float,
+    activation_bar_ratio: float,
+    apply_english_ceiling_filter: bool,
+    use_margin_score: bool,
+    english_ceiling_ratio: float,
+) -> dict[str, torch.Tensor]:
+    n_lang, n_layers, width = stacked.shape
+    activation_probs = stacked.permute(1, 2, 0).contiguous()  # layer x hidden x lang
+    candidate_mask, flattened_probs = _compute_candidate_mask(activation_probs, filter_rate)
+    score, largest, score_name = _compute_selection_score(activation_probs, use_margin_score)
+    score[~candidate_mask] = -torch.inf if largest else torch.inf
+
+    flattened_score = score.flatten()
+    top_score_k = _resolve_topk_count(len(flattened_score), top_rate)
+    _, index = flattened_score.topk(top_score_k, largest=largest)
+    row_index = index // score.size(1)
+    col_index = index % score.size(1)
     selected_probs = activation_probs[row_index, col_index]  # n_selected x lang
 
     selected_probs_by_lang = selected_probs.transpose(0, 1)  # lang x n_selected
-    activation_bar_k = round(len(flattened_probs) * activation_bar_ratio)
+    activation_bar_k = _resolve_topk_count(len(flattened_probs), activation_bar_ratio)
     activation_bar = flattened_probs.kthvalue(activation_bar_k).values.item()
-    lang, indice = torch.where(selected_probs_by_lang > activation_bar)
+    top_valid = selected_probs_by_lang > activation_bar
+    filtered_by_english = 0
+    if apply_english_ceiling_filter:
+        top_valid, filtered_by_english = _apply_english_ceiling_filter(
+            top_valid=top_valid,
+            selected_probs_by_lang=selected_probs_by_lang,
+            languages=languages,
+            english_ceiling_ratio=english_ceiling_ratio,
+        )
+
+    lang, indice = torch.where(top_valid)
     merged_index = torch.stack((row_index, col_index), dim=-1)
 
     selected_mask = torch.zeros((n_lang, n_layers, width), dtype=torch.bool)
@@ -156,8 +210,10 @@ def _lape_select(
         "selected_mask": selected_mask,
         "top_indices": merged_index,
         "top_scores": selected_probs,
-        "top_valid": selected_probs_by_lang > activation_bar,
+        "top_valid": top_valid,
         "counts_per_lang_layer": selected_mask.sum(dim=2),
+        "selection_score_name": score_name,
+        "filtered_by_english_ceiling": filtered_by_english,
     }
 
 
@@ -275,6 +331,14 @@ def _resolve_lape_metric(cfg: DictConfig) -> str:
     return raw
 
 
+def _resolve_identify_options(cfg: DictConfig) -> tuple[bool, bool, float]:
+    identify_cfg = get_pipeline_step(cfg, "step3_identify_neurons")
+    apply_english_ceiling_filter = bool(identify_cfg.get("apply_english_ceiling_filter", False))
+    use_margin_score = bool(identify_cfg.get("use_margin_score", False))
+    english_ceiling_ratio = float(identify_cfg.get("english_ceiling_ratio", DEFAULT_ENGLISH_CEILING_RATIO))
+    return apply_english_ceiling_filter, use_margin_score, english_ceiling_ratio
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="default")
 def main(cfg: DictConfig):
     ex_id = set_ex_id_from_config_name()
@@ -296,6 +360,7 @@ def main(cfg: DictConfig):
     activation_bar_ratio = float(identify_cfg.activation_bar_ratio)
     lape_metric = _resolve_lape_metric(cfg)
     include_mlp, include_attn = _resolve_record_components(cfg)
+    apply_english_ceiling_filter, use_margin_score, english_ceiling_ratio = _resolve_identify_options(cfg)
 
     stacked_by_key = _collect_activation_tensors(
         load_dir,
@@ -314,10 +379,20 @@ def main(cfg: DictConfig):
             print("Using activations from step 2")
             lape = _lape_select(
                 stacked=stacked,
+                languages=languages,
                 top_rate=top_rate,
                 filter_rate=filter_rate,
                 activation_bar_ratio=activation_bar_ratio,
+                apply_english_ceiling_filter=apply_english_ceiling_filter,
+                use_margin_score=use_margin_score,
+                english_ceiling_ratio=english_ceiling_ratio,
             )
+            print(
+                f"[{key}] selection score: {lape['selection_score_name']}, "
+                f"english ceiling filter: {apply_english_ceiling_filter}"
+            )
+            if apply_english_ceiling_filter:
+                print(f"[{key}] assignments removed by English ceiling: {lape['filtered_by_english_ceiling']}")
         else:
             print("Selecting neurons randomly")
             lape = _random_select_from_most_active(
@@ -332,6 +407,8 @@ def main(cfg: DictConfig):
             "top_indices": lape["top_indices"],
             "top_scores": lape["top_scores"],
             "top_valid": lape["top_valid"],
+            "selection_score_name": lape.get("selection_score_name", "random"),
+            "filtered_by_english_ceiling": lape.get("filtered_by_english_ceiling", 0),
             "selected_indices_by_language": _build_serializable_index_lists(lape["selected_mask"], languages),
         }
         key_counts, key_total = _log_selection_stats(key, lape["selected_mask"], languages)
@@ -354,6 +431,9 @@ def main(cfg: DictConfig):
             "filter_rate": filter_rate,
             "activation_bar_ratio": activation_bar_ratio,
             "recorded_metric": lape_metric,
+            "apply_english_ceiling_filter": apply_english_ceiling_filter,
+            "use_margin_score": use_margin_score,
+            "english_ceiling_ratio": english_ceiling_ratio,
         },
         "results": results,
     }
